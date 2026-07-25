@@ -1,0 +1,66 @@
+version: '3'
+
+tasks:
+  default:
+    desc: List all available tasks
+    cmds:
+      - task --list
+
+  fmt:
+    desc: Format Go source code
+    cmds:
+      - go fmt ./...
+
+  vet:
+    desc: Run go vet on codebase
+    cmds:
+      - go vet ./...
+
+  test:
+    desc: Run unit tests
+    cmds:
+      - go test -v ./...
+
+  build:
+    desc: Build all binaries locally
+    cmds:
+      - mkdir -p tmp
+      - go build -o tmp/api-local ./cmd/api/main.go
+      - go build -o tmp/gui-local ./cmd/gui/main.go
+      - go build -o tmp/tui-local ./cmd/tui/main.go
+
+  clean:
+    desc: Clean build artifacts and temporary files
+    cmds:
+      - go clean
+      - rm -rf tmp/*
+
+  up:
+    desc: Build and start all services via Docker Compose
+    cmds:
+      - docker compose up --build
+
+  down:
+    desc: Stop and remove all Docker Compose containers
+    cmds:
+      - docker compose down
+
+  gui:
+    desc: Start the GUI service in Docker Compose
+    cmds:
+      - docker compose up --build gui
+
+  tui:
+    desc: Run the TUI application interactively on the host terminal
+    cmds:
+      - go run ./cmd/tui/main.go
+
+  tui-docker:
+    desc: Run the TUI application interactively inside a Docker container
+    cmds:
+      - docker compose run --rm tui go run ./cmd/tui/main.go
+
+  dev:
+    desc: Start the Dev/Engine service in Docker Compose
+    cmds:
+      - docker compose up --build dev

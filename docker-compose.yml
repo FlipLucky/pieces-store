@@ -1,8 +1,41 @@
 services:
-  app:
+  # GUI/gio
+  gui:
     build:
       context: .
       dockerfile: Dockerfile
+    user: "${UID:-1000}:${GID:-1000}"
+    command: air -c .air.gui.toml
+    volumes:
+      - .:/app
+      - ${XDG_RUNTIME_DIR:-/run/user/1000}/${WAYLAND_DISPLAY:-wayland-0}:/tmp/${WAYLAND_DISPLAY:-wayland-0}
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      - XDG_RUNTIME_DIR=/tmp
+      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
+      - DISPLAY=${DISPLAY:-:0}
+
+  # TUI/tview
+  tui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "${UID:-1000}:${GID:-1000}"
+    command: air -c .air.tui.toml
+    volumes:
+      - .:/app
+    tty: true 
+    stdin_open: true
+
+  # The Engine/Test runner
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "${UID:-1000}:${GID:-1000}"
+    command: air -c .air.dev.toml
     volumes:
       - .:/app
 
