@@ -8,15 +8,16 @@ import (
 	"time"
 
 	"github.com/fliplucky/pieces-store/internal/editor/keymap"
-	"github.com/fliplucky/pieces-store/internal/piecestore"
+	"github.com/fliplucky/pieces-store/internal/piecetable"
+	"github.com/fliplucky/pieces-store/internal/viewmanager"
 )
 
 type Editor struct {
 	mu              sync.RWMutex
-	store           *piecestore.Store
-	runeCalculator  *RuneCalculator
-	virtualGrid     *VirtualGrid
-	cursor          *Cursor
+	table           *piecetable.Table
+	runeCalculator  *viewmanager.RuneCalculator
+	virtualGrid     *viewmanager.VirtualGrid
+	cursor          *viewmanager.Cursor
 	keymapRouter    *keymap.Router
 	isQuitRequested bool
 	change          chan struct{}
@@ -33,10 +34,10 @@ func initRouter() *keymap.Router {
 
 func NewEditor(initialText string) *Editor {
 	ed := &Editor{
-		store:          piecestore.NewPieceStore([]byte(initialText)),
-		runeCalculator: NewRuneCalculator(),
-		virtualGrid:    NewVirtualGrid(),
-		cursor:         NewCursor(),
+		table:          piecetable.NewPieceTable([]byte(initialText)),
+		runeCalculator: viewmanager.NewRuneCalculator(),
+		virtualGrid:    viewmanager.NewVirtualGrid(),
+		cursor:         viewmanager.NewCursor(),
 		keymapRouter:   initRouter(),
 		change:         make(chan struct{}, 1),
 	}
@@ -44,7 +45,7 @@ func NewEditor(initialText string) *Editor {
 	// Ticker simulation - only starts if SIMULATE=true is set in the environment
 	if os.Getenv("SIMULATE") == "true" {
 		go func() {
-			chars := []byte(" Typing simulation active! Now powered by the real Piece Store under the hood.")
+			chars := []byte(" Typing simulation active! Now powered by the real Piece Table under the hood.")
 			idx := 0
 			ticker := time.NewTicker(500 * time.Millisecond)
 			defer ticker.Stop()
@@ -53,18 +54,18 @@ func NewEditor(initialText string) *Editor {
 				ed.mu.Lock()
 				if idx >= len(chars) {
 					// Reset to initial text when simulation reaches the end
-					ed.store = piecestore.NewPieceStore([]byte(initialText))
+					ed.table = piecetable.NewPieceTable([]byte(initialText))
 					ed.cursor.Update(0, 0, 0)
 					idx = 0
 				} else {
 					// Calculate total length and insert the character at the end of the buffer
-					currentLen := ed.store.Len()
-					ed.store.Insert(currentLen, []byte{chars[idx]})
+					currentLen := ed.table.Len()
+					ed.table.Insert(currentLen, []byte{chars[idx]})
 					idx++
 
 					// Update cursor position to the end of the text
-					newOffset := ed.store.Len()
-					gridPos := ed.runeCalculator.ByteOffsetToPosition(ed.store, newOffset)
+					newOffset := ed.table.Len()
+					gridPos := ed.runeCalculator.ByteOffsetToPosition(ed.table, newOffset)
 					screenPos := ed.virtualGrid.GetScreenPosition(gridPos)
 					ed.cursor.Update(newOffset, screenPos.Row, screenPos.Col)
 				}
@@ -78,15 +79,15 @@ func NewEditor(initialText string) *Editor {
 }
 
 func NewEditorFromFile(filePath string) (*Editor, error) {
-	store, err := piecestore.NewPieceStoreFromFile(filePath)
+	table, err := piecetable.NewPieceTableFromFile(filePath)
 	if err != nil {
 		return nil, err
 	}
 	return &Editor{
-		store:          store,
-		runeCalculator: NewRuneCalculator(),
-		virtualGrid:    NewVirtualGrid(),
-		cursor:         NewCursor(),
+		table:          table,
+		runeCalculator: viewmanager.NewRuneCalculator(),
+		virtualGrid:    viewmanager.NewVirtualGrid(),
+		cursor:         viewmanager.NewCursor(),
 		keymapRouter:   initRouter(),
 		change:         make(chan struct{}, 1),
 	}, nil
@@ -95,41 +96,41 @@ func NewEditorFromFile(filePath string) (*Editor, error) {
 func (e *Editor) GetText() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.store.CombinePieces()
+	return e.table.CombinePieces()
 }
 
 func (e *Editor) GetFilePath() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.store.FilePath
+	return e.table.FilePath
 }
 
 func (e *Editor) SaveFile() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.store.Save()
+	return e.table.Save()
 }
 
 func (e *Editor) SaveFileAs(filePath string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.store.SaveAs(filePath)
+	return e.table.SaveAs(filePath)
 }
 
 func (e *Editor) OpenFile(filePath string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	newStore, err := piecestore.NewPieceStoreFromFile(filePath)
+	newTable, err := piecetable.NewPieceTableFromFile(filePath)
 	if err != nil {
 		return err
 	}
-	e.store = newStore
+	e.table = newTable
 	e.cursor.Update(0, 0, 0)
 	e.notifyChange()
 	return nil
 }
 
-func (e *Editor) GetCursor() Cursor {
+func (e *Editor) GetCursor() viewmanager.Cursor {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return *e.cursor
@@ -152,8 +153,8 @@ func (e *Editor) MoveCursorLeft() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	newOffset := e.runeCalculator.MoveLeft(e.store, e.cursor.ByteOffset)
-	gridPos := e.runeCalculator.ByteOffsetToPosition(e.store, newOffset)
+	newOffset := e.runeCalculator.MoveLeft(e.table, e.cursor.ByteOffset)
+	gridPos := e.runeCalculator.ByteOffsetToPosition(e.table, newOffset)
 	screenPos := e.virtualGrid.GetScreenPosition(gridPos)
 
 	e.cursor.Update(newOffset, screenPos.Row, screenPos.Col)
@@ -164,8 +165,8 @@ func (e *Editor) MoveCursorRight() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	newOffset := e.runeCalculator.MoveRight(e.store, e.cursor.ByteOffset)
-	gridPos := e.runeCalculator.ByteOffsetToPosition(e.store, newOffset)
+	newOffset := e.runeCalculator.MoveRight(e.table, e.cursor.ByteOffset)
+	gridPos := e.runeCalculator.ByteOffsetToPosition(e.table, newOffset)
 	screenPos := e.virtualGrid.GetScreenPosition(gridPos)
 
 	e.cursor.Update(newOffset, screenPos.Row, screenPos.Col)
@@ -180,9 +181,9 @@ func (e *Editor) MoveCursorUp() {
 		return
 	}
 
-	targetPos := Position{Row: e.cursor.Row - 1, Col: e.cursor.Col}
-	newOffset := e.runeCalculator.PositionToByteOffset(e.store, targetPos)
-	gridPos := e.runeCalculator.ByteOffsetToPosition(e.store, newOffset)
+	targetPos := viewmanager.Position{Row: e.cursor.Row - 1, Col: e.cursor.Col}
+	newOffset := e.runeCalculator.PositionToByteOffset(e.table, targetPos)
+	gridPos := e.runeCalculator.ByteOffsetToPosition(e.table, newOffset)
 	screenPos := e.virtualGrid.GetScreenPosition(gridPos)
 
 	e.cursor.Update(newOffset, screenPos.Row, screenPos.Col)
@@ -193,9 +194,9 @@ func (e *Editor) MoveCursorDown() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	targetPos := Position{Row: e.cursor.Row + 1, Col: e.cursor.Col}
-	newOffset := e.runeCalculator.PositionToByteOffset(e.store, targetPos)
-	gridPos := e.runeCalculator.ByteOffsetToPosition(e.store, newOffset)
+	targetPos := viewmanager.Position{Row: e.cursor.Row + 1, Col: e.cursor.Col}
+	newOffset := e.runeCalculator.PositionToByteOffset(e.table, targetPos)
+	gridPos := e.runeCalculator.ByteOffsetToPosition(e.table, newOffset)
 	screenPos := e.virtualGrid.GetScreenPosition(gridPos)
 
 	e.cursor.Update(newOffset, screenPos.Row, screenPos.Col)
@@ -211,11 +212,11 @@ func (e *Editor) InsertText(data []byte) {
 		return
 	}
 
-	e.store.Insert(e.cursor.ByteOffset, data)
+	e.table.Insert(e.cursor.ByteOffset, data)
 
 	// Recalculate and update cursor position after insertion
 	newOffset := e.cursor.ByteOffset + len(data)
-	gridPos := e.runeCalculator.ByteOffsetToPosition(e.store, newOffset)
+	gridPos := e.runeCalculator.ByteOffsetToPosition(e.table, newOffset)
 	screenPos := e.virtualGrid.GetScreenPosition(gridPos)
 
 	e.cursor.Update(newOffset, screenPos.Row, screenPos.Col)
@@ -230,24 +231,24 @@ func (e *Editor) DeleteText() {
 		return
 	}
 
-	newOffset := e.runeCalculator.MoveLeft(e.store, e.cursor.ByteOffset)
+	newOffset := e.runeCalculator.MoveLeft(e.table, e.cursor.ByteOffset)
 	lengthToDelete := e.cursor.ByteOffset - newOffset
 
-	e.store.Delete(newOffset, lengthToDelete)
+	e.table.Delete(newOffset, lengthToDelete)
 
 	// Recalculate cursor position after deletion
-	gridPos := e.runeCalculator.ByteOffsetToPosition(e.store, newOffset)
+	gridPos := e.runeCalculator.ByteOffsetToPosition(e.table, newOffset)
 	screenPos := e.virtualGrid.GetScreenPosition(gridPos)
 
 	e.cursor.Update(newOffset, screenPos.Row, screenPos.Col)
 	e.notifyChange()
 }
 
-func (e *Editor) SetMode(m Mode) {
+func (e *Editor) SetMode(m viewmanager.Mode) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.cursor.SetMode(m)
-	if m != ModeCommand {
+	if m != viewmanager.ModeCommand {
 		e.cursor.CommandBuffer = ""
 	}
 	e.notifyChange()
@@ -294,7 +295,7 @@ func (e *Editor) ExecuteCommand(rawCmd string) error {
 	}
 	parts := strings.Fields(trimmed)
 	if len(parts) == 0 {
-		e.cursor.SetMode(ModeNormal)
+		e.cursor.SetMode(viewmanager.ModeNormal)
 		e.cursor.CommandBuffer = ""
 		return nil
 	}
@@ -305,17 +306,17 @@ func (e *Editor) ExecuteCommand(rawCmd string) error {
 	switch command {
 	case "w", "write":
 		if len(parts) > 1 {
-			err = e.store.SaveAs(parts[1])
+			err = e.table.SaveAs(parts[1])
 		} else {
-			err = e.store.Save()
+			err = e.table.Save()
 		}
 	case "e", "edit":
 		if len(parts) > 1 {
-			newStore, openErr := piecestore.NewPieceStoreFromFile(parts[1])
+			newTable, openErr := piecetable.NewPieceTableFromFile(parts[1])
 			if openErr != nil {
 				err = openErr
 			} else {
-				e.store = newStore
+				e.table = newTable
 				e.cursor.Update(0, 0, 0)
 			}
 		} else {
@@ -325,7 +326,7 @@ func (e *Editor) ExecuteCommand(rawCmd string) error {
 		err = ErrQuit
 		e.isQuitRequested = true
 	case "wq":
-		if saveErr := e.store.Save(); saveErr != nil {
+		if saveErr := e.table.Save(); saveErr != nil {
 			err = saveErr
 		} else {
 			err = ErrQuit
@@ -335,7 +336,7 @@ func (e *Editor) ExecuteCommand(rawCmd string) error {
 		err = ErrUnknownCommand
 	}
 
-	e.cursor.SetMode(ModeNormal)
+	e.cursor.SetMode(viewmanager.ModeNormal)
 	e.cursor.CommandBuffer = ""
 	e.notifyChange()
 	return err
@@ -351,13 +352,13 @@ func (e *Editor) Undo() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	success := e.store.Undo()
+	success := e.table.Undo()
 	if success {
 		newOffset := e.cursor.ByteOffset
-		if newOffset > e.store.Len() {
-			newOffset = e.store.Len()
+		if newOffset > e.table.Len() {
+			newOffset = e.table.Len()
 		}
-		gridPos := e.runeCalculator.ByteOffsetToPosition(e.store, newOffset)
+		gridPos := e.runeCalculator.ByteOffsetToPosition(e.table, newOffset)
 		screenPos := e.virtualGrid.GetScreenPosition(gridPos)
 
 		e.cursor.Update(newOffset, screenPos.Row, screenPos.Col)
@@ -367,7 +368,7 @@ func (e *Editor) Undo() bool {
 }
 
 func (e *Editor) SetModeInt(m int) {
-	e.SetMode(Mode(m))
+	e.SetMode(viewmanager.Mode(m))
 }
 
 func (e *Editor) GetModeInt() int {

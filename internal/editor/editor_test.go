@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fliplucky/pieces-store/internal/piecestore"
+	"github.com/fliplucky/pieces-store/internal/piecetable"
 )
 
 func TestEditorOrchestrator(t *testing.T) {
@@ -14,7 +14,7 @@ func TestEditorOrchestrator(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	ed.mu.Lock()
-	ed.store = piecestore.NewPieceStore([]byte("Hello\nWorld"))
+	ed.table = piecetable.NewPieceTable([]byte("Hello\nWorld"))
 	ed.cursor.Update(0, 0, 0)
 	ed.mu.Unlock()
 

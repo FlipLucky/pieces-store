@@ -8,6 +8,7 @@ import (
 	"github.com/rivo/tview"
 
 	"github.com/fliplucky/pieces-store/internal/editor"
+	"github.com/fliplucky/pieces-store/internal/viewmanager"
 )
 
 func Boot(ed *editor.Editor) error {
@@ -22,11 +23,11 @@ func Boot(ed *editor.Editor) error {
 	editorView := tview.NewTextView().
 		SetDynamicColors(true).
 		SetRegions(true)
-	
+
 	editorView.SetBorder(true).
 		SetTitle("Pieces Store TUI Editor").
 		SetBorderColor(tcell.GetColor("#24283b"))
-	
+
 	editorView.SetBackgroundColor(tokyoBg)
 	editorView.SetTextColor(tokyoFg)
 
@@ -82,17 +83,17 @@ func Boot(ed *editor.Editor) error {
 
 		editorView.SetText(strings.Join(formattedLines, "\n"))
 
-		if cursor.Mode == editor.ModeCommand {
+		if cursor.Mode == viewmanager.ModeCommand {
 			statusBar.SetText(fmt.Sprintf(" [#7aa2f7]:%s[white]", cursor.CommandBuffer))
 		} else {
 			// Update bottom status bar with color-coded modes
 			var modeStr string
 			switch cursor.Mode {
-			case editor.ModeNormal:
+			case viewmanager.ModeNormal:
 				modeStr = "[#e0af68]-- NORMAL --[white]" // Yellow
-			case editor.ModeInsert:
+			case viewmanager.ModeInsert:
 				modeStr = "[#9ece6a]-- INSERT --[white]" // Green
-			case editor.ModeVisual:
+			case viewmanager.ModeVisual:
 				modeStr = "[#bb9af7]-- VISUAL --[white]" // Purple
 			default:
 				modeStr = cursor.Mode.String()

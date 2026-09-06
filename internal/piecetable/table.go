@@ -1,14 +1,14 @@
-// Package piecestore is the heart of the editor, being the source of the text.
+// Package piecetable is the heart of the editor, being the source of the text.
 // To mutate, use insert and delete
 // Use CombinePieces to get the full text, while get range is to get a slice for a vieuwport
-// FindPieceAt is to locate which piece contains the offset, while GetRuneAt is to retrieve a specific character from the store.
-package piecestore
+// FindPieceAt is to locate which piece contains the offset, while GetRuneAt is to retrieve a specific character from the table.
+package piecetable
 
 import (
 	"sync"
 )
 
-type Store struct {
+type Table struct {
 	mu       sync.RWMutex
 	FilePath string
 	Master   []byte
@@ -35,8 +35,8 @@ const (
 	Add    BufferType = "ADD"
 )
 
-func NewPieceStore(data []byte) *Store {
-	return &Store{
+func NewPieceTable(data []byte) *Table {
+	return &Table{
 		Master:  data,
 		Add:     []byte{},
 		Pieces:  []Piece{{BufferType: Master, Start: 0, Length: len(data)}},

@@ -1,8 +1,8 @@
-package piecestore
+package piecetable
 
 import "unicode/utf8"
 
-func (s *Store) FindPieceAt(offset int) (int, int) {
+func (s *Table) FindPieceAt(offset int) (int, int) {
 	currentOffset := 0
 	for i, p := range s.Pieces {
 		if offset >= currentOffset && offset < currentOffset+p.Length {
@@ -14,7 +14,7 @@ func (s *Store) FindPieceAt(offset int) (int, int) {
 	return len(s.Pieces), 0
 }
 
-func (s *Store) GetRuneAt(offset int) (rune, int) {
+func (s *Table) GetRuneAt(offset int) (rune, int) {
 	if offset < 0 || offset >= s.Len() {
 		return utf8.RuneError, 0
 	}
@@ -35,7 +35,7 @@ func (s *Store) GetRuneAt(offset int) (rune, int) {
 	return utf8.DecodeRune(source[start:end])
 }
 
-func (s *Store) Len() int {
+func (s *Table) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	total := 0
@@ -45,7 +45,7 @@ func (s *Store) Len() int {
 	return total
 }
 
-func (s *Store) CombinePieces() string {
+func (s *Table) CombinePieces() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var result []byte
@@ -60,11 +60,11 @@ func (s *Store) CombinePieces() string {
 	return string(result)
 }
 
-func (s *Store) GetText() string {
+func (s *Table) GetText() string {
 	return s.CombinePieces()
 }
 
-func (s *Store) GetRange(start, end int) []byte {
+func (s *Table) GetRange(start, end int) []byte {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

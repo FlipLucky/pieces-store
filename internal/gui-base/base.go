@@ -18,6 +18,7 @@ import (
 	"gioui.org/widget/material"
 
 	"github.com/fliplucky/pieces-store/internal/editor"
+	"github.com/fliplucky/pieces-store/internal/viewmanager"
 )
 
 type GuiApp interface {
@@ -99,7 +100,7 @@ func (g *GioApp) Run() {
 					switch e := ev.(type) {
 					case key.EditEvent:
 						cursor := g.editor.GetCursor()
-						if cursor.Mode == editor.ModeInsert {
+						if cursor.Mode == viewmanager.ModeInsert {
 							g.editor.InsertText([]byte(e.Text))
 						}
 					case key.Event:
@@ -107,7 +108,7 @@ func (g *GioApp) Run() {
 							cursor := g.editor.GetCursor()
 							nameLower := strings.ToLower(string(e.Name))
 
-							if cursor.Mode == editor.ModeNormal {
+							if cursor.Mode == viewmanager.ModeNormal {
 								switch nameLower {
 								case "h":
 									g.editor.MoveCursorLeft()
@@ -118,14 +119,14 @@ func (g *GioApp) Run() {
 								case "j":
 									g.editor.MoveCursorDown()
 								case "i":
-									g.editor.SetMode(editor.ModeInsert)
+									g.editor.SetMode(viewmanager.ModeInsert)
 								case "x":
 									g.editor.DeleteText()
 								}
-							} else if cursor.Mode == editor.ModeInsert {
+							} else if cursor.Mode == viewmanager.ModeInsert {
 								switch e.Name {
 								case key.NameEscape:
-									g.editor.SetMode(editor.ModeNormal)
+									g.editor.SetMode(viewmanager.ModeNormal)
 								case key.NameEnter, key.NameReturn:
 									g.editor.InsertText([]byte("\n"))
 								case key.NameDeleteBackward, "Backspace":
@@ -212,11 +213,11 @@ func (g *GioApp) Run() {
 
 						var modeColor color.NRGBA
 						switch cursor.Mode {
-						case editor.ModeNormal:
+						case viewmanager.ModeNormal:
 							modeColor = color.NRGBA{R: 0xe0, G: 0xaf, B: 0x68, A: 0xff} // Yellow
-						case editor.ModeInsert:
+						case viewmanager.ModeInsert:
 							modeColor = color.NRGBA{R: 0x9e, G: 0xce, B: 0x6a, A: 0xff} // Green
-						case editor.ModeVisual:
+						case viewmanager.ModeVisual:
 							modeColor = color.NRGBA{R: 0xbb, G: 0x9a, B: 0xf7, A: 0xff} // Purple
 						default:
 							modeColor = g.theme.Palette.Fg

@@ -1,6 +1,6 @@
-package piecestore
+package piecetable
 
-func (s *Store) Insert(offset int, data []byte) {
+func (s *Table) Insert(offset int, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(data) == 0 {
@@ -46,7 +46,7 @@ func (s *Store) Insert(offset int, data []byte) {
 	s.coalesceUnlocked()
 }
 
-func (s *Store) Delete(start, length int) {
+func (s *Table) Delete(start, length int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if length <= 0 {
@@ -97,13 +97,13 @@ func (s *Store) Delete(start, length int) {
 	s.coalesceUnlocked()
 }
 
-func (s *Store) Coalesce() {
+func (s *Table) Coalesce() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.coalesceUnlocked()
 }
 
-func (s *Store) coalesceUnlocked() {
+func (s *Table) coalesceUnlocked() {
 	if len(s.Pieces) <= 1 {
 		return
 	}
@@ -124,7 +124,7 @@ func (s *Store) coalesceUnlocked() {
 	s.Pieces = coalesced
 }
 
-func (s *Store) Undo() bool {
+func (s *Table) Undo() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.History) == 0 {

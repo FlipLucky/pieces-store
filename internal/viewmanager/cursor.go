@@ -1,4 +1,4 @@
-package editor
+package viewmanager
 
 type Mode int
 

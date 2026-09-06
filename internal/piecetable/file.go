@@ -1,4 +1,4 @@
-package piecestore
+package piecetable
 
 import (
 	"errors"
@@ -7,17 +7,17 @@ import (
 
 var ErrNoFilePath = errors.New("no file path specified")
 
-func NewPieceStoreFromFile(filePath string) (*Store, error) {
+func NewPieceTableFromFile(filePath string) (*Table, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
 	}
-	store := NewPieceStore(data)
-	store.FilePath = filePath
-	return store, nil
+	table := NewPieceTable(data)
+	table.FilePath = filePath
+	return table, nil
 }
 
-func (s *Store) Save() error {
+func (s *Table) Save() error {
 	s.mu.RLock()
 	filePath := s.FilePath
 	s.mu.RUnlock()
@@ -28,7 +28,7 @@ func (s *Store) Save() error {
 	return s.SaveAs(filePath)
 }
 
-func (s *Store) SaveAs(filePath string) error {
+func (s *Table) SaveAs(filePath string) error {
 	content := s.CombinePieces()
 	err := os.WriteFile(filePath, []byte(content), 0644)
 	if err != nil {

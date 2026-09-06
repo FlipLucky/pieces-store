@@ -1,9 +1,22 @@
-package editor
+package viewmanager
 
 import (
 	"testing"
+	"unicode/utf8"
 )
 
+type ByteDocument []byte
+
+func (b ByteDocument) Len() int {
+	return len(b)
+}
+
+func (b ByteDocument) GetRuneAt(offset int) (rune, int) {
+	if offset >= len(b) || offset < 0 {
+		return utf8.RuneError, 0
+	}
+	return utf8.DecodeRune(b[offset:])
+}
 func TestRuneCalculator(t *testing.T) {
 	rc := NewRuneCalculator()
 	text := ByteDocument("Hello\n世界\r\nGo")
@@ -65,5 +78,38 @@ func TestRuneCalculator(t *testing.T) {
 	right := rc.MoveRight(text, 6)
 	if right != 9 { // Steps forward by one rune from 世 to 界
 		t.Errorf("MoveRight expected offset 9, got %d", right)
+	}
+}
+
+// TestMotionsWithMultiByteUTF8 exercises the word/text-object motions against
+// a multi-byte rune sitting inside a word. Before the byte-stepping fix in
+// FindOffset, any motion whose scan crossed a multi-byte character would
+// abort immediately and silently return the wrong offset.
+func TestMotionsWithMultiByteUTF8(t *testing.T) {
+	// byte layout: ' '(0) c(1) a(2) f(3) é(4-5) ' '(6) b(7) a(8) r(9) ' '(10) b(11) a(12) z(13)
+	text := ByteDocument(" café bar baz")
+
+	if got := MotionWordForward(text, 1); got != 7 {
+		t.Errorf(`MotionWordForward(1) = %d, want 7 (start of "bar")`, got)
+	}
+
+	if got := MotionWordBackward(text, 9); got != 7 {
+		t.Errorf(`MotionWordBackward(9) = %d, want 7 (start of "bar")`, got)
+	}
+
+	if got := MotionWordBackward(text, 12); got != 11 {
+		t.Errorf(`MotionWordBackward(12) = %d, want 11 (start of "baz")`, got)
+	}
+
+	if rng := RangeInnerWord(text, 4); rng.Start != 1 || rng.Length != 5 {
+		t.Errorf(`RangeInnerWord(4) = %+v, want {Start:1 Length:5} ("café")`, rng)
+	}
+
+	if rng := RangeAroundWord(text, 4); rng.Start != 1 || rng.Length != 6 {
+		t.Errorf(`RangeAroundWord(4) = %+v, want {Start:1 Length:6} ("café ")`, rng)
+	}
+
+	if got := MotionFindCharForward(text, 1, "r"); got != 9 {
+		t.Errorf(`MotionFindCharForward(1, "r") = %d, want 9`, got)
 	}
 }

@@ -1,6 +1,7 @@
 package keymap
 
 // DefaultGraphBuilder constructs standard graphs for Vim modes
+
 func BuildDefaultGraphs() map[int]map[string]*KeyNode {
 	// Mode Constants (matching editor.Mode ints: 0=Normal, 1=Insert, 2=Visual, 3=Command)
 	const (
