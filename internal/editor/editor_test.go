@@ -89,3 +89,41 @@ func TestFileCommands(t *testing.T) {
 		t.Errorf("Expected ErrQuit, got %v", err)
 	}
 }
+
+func TestQuitBlockedByUnsavedChanges(t *testing.T) {
+	ed := NewEditor("hello")
+	ed.InsertText([]byte("!"))
+
+	if err := ed.ExecuteCommand(":q"); err != ErrUnsavedChanges {
+		t.Fatalf(":q on a dirty buffer = %v, want ErrUnsavedChanges", err)
+	}
+	if ed.IsQuitRequested() {
+		t.Fatalf("IsQuitRequested() = true, want false — :q should have been refused")
+	}
+	if got := ed.GetLastCommandError(); got != ErrUnsavedChanges {
+		t.Errorf("GetLastCommandError() = %v, want ErrUnsavedChanges", got)
+	}
+
+	if err := ed.ExecuteCommand(":q!"); err != ErrQuit {
+		t.Fatalf(":q! on a dirty buffer = %v, want ErrQuit", err)
+	}
+	if !ed.IsQuitRequested() {
+		t.Fatalf("IsQuitRequested() = false after :q!, want true")
+	}
+}
+
+func TestSaveClearsDirty(t *testing.T) {
+	tmpFile := t.TempDir() + "/test_file.txt"
+	ed := NewEditor("hello")
+	ed.InsertText([]byte("!"))
+
+	if err := ed.ExecuteCommand(":q"); err != ErrUnsavedChanges {
+		t.Fatalf(":q before saving = %v, want ErrUnsavedChanges", err)
+	}
+	if err := ed.ExecuteCommand(":w " + tmpFile); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+	if err := ed.ExecuteCommand(":q"); err != ErrQuit {
+		t.Fatalf(":q after saving = %v, want ErrQuit", err)
+	}
+}

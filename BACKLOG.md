@@ -10,6 +10,17 @@ This is not the same as a blocker: if something here is actually stopping
 the current phase's work, it belongs in `CLAUDE.md`'s Known Issues, not
 here.
 
+**Resolved since the last pass (2026-09-13), removed from this list**: the
+undo/redo model decision (settled — symmetric redo stack on
+`piecetable.Table`, see `writer.go`'s `Undo`/`Redo`); `:q`'s missing dirty
+guard (added — `Table.Dirty`, `:q!` force-quits); `internal/editor/keymap`
+(deleted entirely, replaced by `internal/keyengine`); `internal/editor/
+interfaces.go`'s orphaned `Document` (deleted); the `Around` modifier and
+`LineMotion` noun missing table entries (both real now, in
+`internal/keyengine/normal_mode.go`). `RuneMotion` stays deliberately
+unregistered — it's for a future `x` keybinding, not in the agreed 14-case
+list, not a gap.
+
 ## Deferred performance (viewport-scoping changes the calculus here)
 
 - **`piecetable.FindPieceAt` is an O(P) linear scan** (`internal/piecetable/reader.go`)
@@ -18,9 +29,10 @@ here.
   single-file MVP session, piece count should stay small enough that this
   doesn't matter in practice. Revisit if a long, heavily-edited session
   makes it measurably slow.
-- **`Table.History` grows unbounded** — every `Insert`/`Delete` pushes a full
-  snapshot forever, no cap or eviction. Revisit once real session lengths
-  are known; a simple depth cap or coalescing strategy would fix it.
+- **`Table.History` (and now `RedoStack`) grow unbounded** — every
+  `Insert`/`Delete` pushes a full snapshot forever, no cap or eviction.
+  Revisit once real session lengths are known; a simple depth cap or
+  coalescing strategy would fix it.
 - **`internal/viewmanager/virtual_grid.go`'s `GetScreenPosition` is a no-op**
   — no scroll offsets, line wrapping, tab expansion, or gutter width yet.
   Needed for real files with tabs/long lines; not needed for a minimal
@@ -40,29 +52,24 @@ here.
 - **No rune-boundary guard on `Insert`/`Delete`/`GetRange`** — a
   non-rune-aligned byte offset would silently corrupt UTF-8 text. Not
   currently reachable (all current callers stay rune-aligned via
-  `viewmanager`), but no defense-in-depth exists.
+  `internal/offset`), but no defense-in-depth exists.
 
 ## API/interface cleanup (cheap, no urgency)
 
-- `internal/editor/interfaces.go`'s `Document` interface is unused/dead —
-  `viewmanager.Document` is the one actually consumed.
-- `internal/editor/keymap` package (and its test file) should be deleted
-  once `key_engine.go` fully replaces it — see `CLAUDE.md` Known Issues.
-- Once `key_engine.go` is complete: `CreateModifiers()` is missing an
-  `Around` entry despite being referenced in verbs' whitelists and the
-  `KeyActionName` enum; `CreateNouns()` is missing `LineMotion`/`RuneMotion`
-  entries despite existing as enum values.
-
-## Needs a decision, not just a fix
-
-- **Undo/redo model**: action-log-based (undo replays the inverse of the
-  last action, redo re-applies it) vs. staying snapshot-based. Likely to
-  get forced during the key-engine work anyway, since `u` needs real
-  backing — see `CLAUDE.md` Roadmap.
-- **`:q` has no dirty/unsaved-changes guard** — quits unconditionally, no
-  `:q!` distinction possible since nothing tracks "modified." Flagged
-  separately from the rest of this list because it's arguably not a
-  sidebar item at all — losing unsaved work isn't acceptable behavior for
-  even the most minimal text editor, so this may belong in the "backend
-  needs to work" must-have bucket rather than deferred. Worth a deliberate
-  call, not a default.
+- **`internal/offset/motions.go`'s `ScanUntil` is dead code** — nothing
+  calls it, has the same byte-stepping bug `FindOffset` used to have, looks
+  like an abandoned attempt to simplify/replace `FindOffset` that never got
+  finished. Not yet decided whether to delete it or complete the
+  replacement.
+- **`internal/keyengine/visual_mode.go`** is still the original copy-paste
+  placeholder — real Visual-mode operator semantics differ from Normal's
+  (an operator acts on the current selection directly, no following noun
+  needed), so this needs real design work, not just filling in the
+  existing table shape, whenever Visual mode is actually in scope.
+- **Counted delete isn't implemented** — `executeDelete` (`internal/editor/dispatch.go`)
+  ignores `Count`, applying once regardless (e.g. `3diw` behaves like
+  `diw`). Not in the agreed 14-case list; `executeMove` already loops on
+  `Count` if a similar loop is wanted here later.
+- `internal/gui-base`/`internal/tui-base` still do naive full-buffer
+  `GetText()` + `strings.Split` on every render — the actual fix is the
+  planned viewport-as-offset-slice work, not a local patch here.

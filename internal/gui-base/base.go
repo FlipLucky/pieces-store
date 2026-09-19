@@ -3,13 +3,12 @@ package guibase
 import (
 	"fmt"
 	"image/color"
-	"log"
-	"strings"
 
 	"gioui.org/app"
 	"gioui.org/font/gofont"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
+	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -18,18 +17,30 @@ import (
 	"gioui.org/widget/material"
 
 	"github.com/fliplucky/pieces-store/internal/editor"
+	"github.com/fliplucky/pieces-store/internal/types"
 	"github.com/fliplucky/pieces-store/internal/viewmanager"
 )
+
+// viewportMargin is how many extra lines above/below the visible window get
+// fetched, so a fast scroll doesn't have to wait on a fresh Viewport call.
+const viewportMargin = 10
+
+// maxCompletionRows caps how many :e/:w completion candidates the popup
+// shows at once — see completionWindow.
+const maxCompletionRows = 8
 
 type GuiApp interface {
 	Run()
 }
 
 type GioApp struct {
-	editor  *editor.Editor
-	theme   *material.Theme
-	tag     *int
-	focused bool
+	editor *editor.Editor
+	theme  *material.Theme
+	tag    *int
+	// topRow is the first document row currently rendered — scroll state
+	// lives here (per-window), not on Editor, same reasoning as
+	// viewmanager owning view state generally.
+	topRow int
 }
 
 func CreateApp(ed *editor.Editor) GuiApp {
@@ -43,10 +54,9 @@ func CreateApp(ed *editor.Editor) GuiApp {
 	theme.Palette.ContrastFg = color.NRGBA{R: 0x1a, G: 0x1b, B: 0x26, A: 0xff} // Deep dark text for cursor overlay
 
 	return &GioApp{
-		editor:  ed,
-		theme:   theme,
-		tag:     new(int),
-		focused: false,
+		editor: ed,
+		theme:  theme,
+		tag:    new(int),
 	}
 }
 
@@ -70,191 +80,388 @@ func (g *GioApp) Run() {
 				ops.Reset()
 				gtx := app.NewContext(&ops, e)
 
-				if !g.focused {
-					fmt.Printf("focussed was false, focussing")
-					gtx.Execute(key.FocusCmd{Tag: g.tag})
-					g.focused = true
-				}
-				// 1. Declare target input area over the entire window constraints
-				// Paint the entire window background and register input area inside the clip stack
+				// Declare the input area over the entire window and paint
+				// the background.
 				clipStack := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
 				event.Op(gtx.Ops, g.tag)
 
-				gtx.Execute(key.FocusCmd{Tag: g.tag})
+				// The focus request must come *after* event.Op has
+				// registered the tag in this frame's ops — requesting it
+				// any earlier gets silently dropped, since the tag isn't
+				// yet a valid focus target for this frame.
+				if !gtx.Focused(g.tag) {
+					gtx.Execute(key.FocusCmd{Tag: g.tag})
+				}
 
 				paint.ColorOp{Color: g.theme.Palette.Bg}.Add(gtx.Ops)
 				paint.PaintOp{}.Add(gtx.Ops)
 
-				focused := gtx.Focused(g.tag)
-				log.Printf("[DEBUG] GUI Frame: tag=%p focused=%t", g.tag, focused)
+				g.handleEvents(gtx)
 
-				// 2. Query event queue using key.Filter
-				for {
-					// ev, ok := gtx.Event(key.Filter{Focus: g.tag})
-					ev, ok := gtx.Event(key.Filter{})
-					if !ok {
-						break
-					}
-					log.Printf("[DEBUG] GUI Event retrieved: %#v", ev)
-					log.Printf("[DEBUG] Raw Event received: %T, Value: %#v", ev, ev)
-					switch e := ev.(type) {
-					case key.EditEvent:
-						cursor := g.editor.GetCursor()
-						if cursor.Mode == viewmanager.ModeInsert {
-							g.editor.InsertText([]byte(e.Text))
-						}
-					case key.Event:
-						if e.State == key.Press {
-							cursor := g.editor.GetCursor()
-							nameLower := strings.ToLower(string(e.Name))
-
-							if cursor.Mode == viewmanager.ModeNormal {
-								switch nameLower {
-								case "h":
-									g.editor.MoveCursorLeft()
-								case "l":
-									g.editor.MoveCursorRight()
-								case "k":
-									g.editor.MoveCursorUp()
-								case "j":
-									g.editor.MoveCursorDown()
-								case "i":
-									g.editor.SetMode(viewmanager.ModeInsert)
-								case "x":
-									g.editor.DeleteText()
-								}
-							} else if cursor.Mode == viewmanager.ModeInsert {
-								switch e.Name {
-								case key.NameEscape:
-									g.editor.SetMode(viewmanager.ModeNormal)
-								case key.NameEnter, key.NameReturn:
-									g.editor.InsertText([]byte("\n"))
-								case key.NameDeleteBackward, "Backspace":
-									g.editor.DeleteText()
-								}
-							}
-						}
-					}
+				if g.editor.IsQuitRequested() {
+					window.Perform(system.ActionClose)
 				}
 
-				// 3. Render Content and Layout
-				currentText := g.editor.GetText()
 				cursor := g.editor.GetCursor()
+				lineHeight := lineHeightPx(gtx, g.theme)
+				visibleRows := visibleRowCount(gtx, lineHeight)
+				g.topRow = followCursor(g.topRow, cursor.Row, visibleRows)
+				slice := g.editor.Viewport(g.topRow, visibleRows, viewportMargin)
 
 				layout.Flex{
 					Axis:      layout.Vertical,
 					Alignment: layout.Start,
 				}.Layout(gtx,
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						// Split editor text into lines
-						lines := strings.Split(currentText, "\n")
-
-						// Render lines inside a vertical list
-						var list layout.List
-						list.Axis = layout.Vertical
-
-						return list.Layout(gtx, len(lines), func(gtx layout.Context, index int) layout.Dimensions {
-							line := lines[index]
-
-							if index != cursor.Row {
-								// Regular line (Tokyo Night silver-blue foreground)
-								lbl := material.Label(g.theme, g.theme.TextSize, line)
-								lbl.Color = g.theme.Palette.Fg
-								return lbl.Layout(gtx)
-							}
-
-							// Line with active cursor: layout rune by rune
-							runes := []rune(line)
-
-							var charList layout.List
-							charList.Axis = layout.Horizontal
-
-							count := len(runes)
-							if cursor.Col >= len(runes) {
-								count++
-							}
-
-							return charList.Layout(gtx, count, func(gtx layout.Context, charIndex int) layout.Dimensions {
-								var charStr string
-								isCursor := charIndex == cursor.Col
-
-								if charIndex < len(runes) {
-									charStr = string(runes[charIndex])
-								} else {
-									charStr = " " // cursor trailing position
-								}
-
-								if !isCursor {
-									lbl := material.Label(g.theme, g.theme.TextSize, charStr)
-									lbl.Color = g.theme.Palette.Fg
-									return lbl.Layout(gtx)
-								}
-
-								// Draw solid cursor block beneath the character
-								return layout.Stack{Alignment: layout.Center}.Layout(gtx,
-									layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-										defer clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops).Pop()
-										paint.ColorOp{Color: g.theme.Palette.ContrastBg}.Add(gtx.Ops)
-										paint.PaintOp{}.Add(gtx.Ops)
-										return layout.Dimensions{Size: gtx.Constraints.Min}
-									}),
-									layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-										lbl := material.Label(g.theme, g.theme.TextSize, charStr)
-										lbl.Color = g.theme.Palette.ContrastFg
-										return lbl.Layout(gtx)
-									}),
-								)
-							})
-						})
+						return renderBody(gtx, g.theme, slice, cursor)
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						// Render bottom Vim status bar
-						statusBarBg := color.NRGBA{R: 0x24, G: 0x28, B: 0x3b, A: 0xff} // Tokyo Night darker status background
-
-						var modeColor color.NRGBA
-						switch cursor.Mode {
-						case viewmanager.ModeNormal:
-							modeColor = color.NRGBA{R: 0xe0, G: 0xaf, B: 0x68, A: 0xff} // Yellow
-						case viewmanager.ModeInsert:
-							modeColor = color.NRGBA{R: 0x9e, G: 0xce, B: 0x6a, A: 0xff} // Green
-						case viewmanager.ModeVisual:
-							modeColor = color.NRGBA{R: 0xbb, G: 0x9a, B: 0xf7, A: 0xff} // Purple
-						default:
-							modeColor = g.theme.Palette.Fg
-						}
-
-						return layout.Stack{}.Layout(gtx,
-							layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-								defer clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops).Pop()
-								paint.ColorOp{Color: statusBarBg}.Add(gtx.Ops)
-								paint.PaintOp{}.Add(gtx.Ops)
-								return layout.Dimensions{Size: gtx.Constraints.Min}
-							}),
-							layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-								return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-										lbl := material.Label(g.theme, g.theme.TextSize, fmt.Sprintf(" -- %s -- ", cursor.Mode.String()))
-										lbl.Color = modeColor
-										return lbl.Layout(gtx)
-									}),
-									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-										lbl := material.Label(g.theme, g.theme.TextSize, fmt.Sprintf(" | Row: %d  Col: %d | Offset: %d ", cursor.Row, cursor.Col, cursor.ByteOffset))
-										lbl.Color = g.theme.Palette.Fg
-										return lbl.Layout(gtx)
-									}),
-								)
-							}),
-						)
+						return renderCompletionPopup(gtx, g.theme, cursor)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return renderStatusBar(gtx, g.theme, g.editor, cursor)
 					}),
 				)
 
-				// Pop the main window clipStack
 				clipStack.Pop()
-
 				e.Frame(gtx.Ops)
 			}
 		}
 	}()
 
 	app.Main()
+}
+
+// handleEvents drains this frame's key events and forwards each one to
+// Editor.HandleKey (or InsertLiteralText for multi-rune paste/IME chunks) —
+// the frontend does no vim-grammar interpretation of its own, matching
+// tui-base's single ed.HandleKey(keyStr) call site. A physical keystroke
+// arrives as either a key.EditEvent (its produced text) or a key.Event (its
+// name/modifiers), never meaningfully both: printable keys are handled via
+// EditEvent's text, and key.Event is only translated for the non-printable
+// keys EditEvent never carries text for (Escape, Enter, Backspace, Ctrl
+// combos) — so nothing here double-dispatches a single keystroke.
+func (g *GioApp) handleEvents(gtx layout.Context) {
+	for {
+		// key.FocusFilter is what makes g.tag "focusable" at all — without
+		// it, the router strips focus from the tag every single frame (it
+		// only keeps a focus target that some registered filter actually
+		// claims), so key.FocusCmd never sticks and key.EditEvent (which
+		// is only ever routed to the currently-focused tag) never arrives.
+		// key.Filter{} separately picks up named/control key.Events, which
+		// don't require focus at all — but only events with NO modifiers,
+		// since a filter's Required/Optional default to zero and
+		// keyFilterMatch rejects any modifier bit not covered by one of
+		// them (`e.Modifiers &^ (Required|Optional) != 0`). Declaring
+		// Optional: key.ModCtrl is what lets Ctrl-combos (<C-r>, <C-n>,
+		// <C-p>) through at all — without it they're silently dropped
+		// before handleEvents ever sees them, same failure shape as bare
+		// Tab below. Bare Tab is a further special case on top of that:
+		// Gio reserves it as a system-level "move focus to the next
+		// widget" key and won't deliver it to a wildcard key.Filter{} at
+		// all (see keyFilterMatch's "system" flag) — it has to be claimed
+		// explicitly by name, or it's silently consumed for focus-cycling
+		// instead of reaching us (as it was doing for :e/:w completion).
+		ev, ok := gtx.Event(
+			key.FocusFilter{Target: g.tag},
+			key.Filter{Optional: key.ModCtrl},
+			key.Filter{Name: key.NameTab},
+		)
+		if !ok {
+			break
+		}
+		switch ev := ev.(type) {
+		case key.EditEvent:
+			runes := []rune(ev.Text)
+			switch len(runes) {
+			case 0:
+			case 1:
+				g.editor.HandleKey(string(runes[0]))
+			default:
+				g.editor.InsertLiteralText(ev.Text)
+			}
+		case key.Event:
+			if keyStr, ok := translateKeyEvent(ev); ok {
+				g.editor.HandleKey(keyStr)
+			}
+		}
+	}
+}
+
+// translateKeyEvent maps a named/control key.Event to the engine's key
+// vocabulary. Plain printable keys are deliberately not handled here — they
+// arrive via key.EditEvent instead (see handleEvents).
+func translateKeyEvent(e key.Event) (string, bool) {
+	if e.State != key.Press {
+		return "", false
+	}
+	switch e.Name {
+	case key.NameEscape:
+		return "<Esc>", true
+	case key.NameReturn, key.NameEnter:
+		return "<Enter>", true
+	case key.NameDeleteBackward:
+		return "<BS>", true
+	case key.NameTab:
+		return "<Tab>", true
+	}
+	if e.Modifiers.Contain(key.ModCtrl) {
+		switch e.Name {
+		case "R":
+			return "<C-r>", true
+		case "N":
+			return "<C-n>", true
+		case "P":
+			return "<C-p>", true
+		}
+	}
+	return "", false
+}
+
+// lineHeightPx estimates a line's pixel height from the theme's text size
+// (size + a leading factor) — approximate, but good enough to size the
+// viewport window; exact text-shaper metrics can replace this later.
+func lineHeightPx(gtx layout.Context, theme *material.Theme) int {
+	h := int(float32(gtx.Sp(theme.TextSize)) * 1.2)
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
+// visibleRowCount is how many text rows fit above the (single-line) status
+// bar, given the current window height.
+func visibleRowCount(gtx layout.Context, lineHeight int) int {
+	available := gtx.Constraints.Max.Y - lineHeight
+	rows := available / lineHeight
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// followCursor keeps the cursor's row within the visible window, scrolling
+// only the minimum amount necessary rather than re-centering every frame.
+func followCursor(topRow, cursorRow, visibleRows int) int {
+	if cursorRow < topRow {
+		return cursorRow
+	}
+	if cursorRow >= topRow+visibleRows {
+		return cursorRow - visibleRows + 1
+	}
+	return topRow
+}
+
+// renderBody lays out exactly the lines in slice — never the whole
+// document — one Flex row per line.
+func renderBody(gtx layout.Context, theme *material.Theme, slice viewmanager.Slice, cursor editor.Cursor) layout.Dimensions {
+	children := make([]layout.FlexChild, len(slice.Lines))
+	for i, line := range slice.Lines {
+		absRow := slice.StartRow + i
+		line := line
+		children[i] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return renderLine(gtx, theme, line, absRow, cursor)
+		})
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+}
+
+func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow int, cursor editor.Cursor) layout.Dimensions {
+	if absRow != cursor.Row {
+		lbl := material.Label(theme, theme.TextSize, line)
+		lbl.Color = theme.Palette.Fg
+		return lbl.Layout(gtx)
+	}
+
+	// The cursor's line: lay out rune by rune so exactly one cell can be
+	// styled as the cursor.
+	runes := []rune(line)
+	count := len(runes)
+	if cursor.Col >= count {
+		count++ // trailing cursor position past the last rune
+	}
+
+	var charList layout.List
+	charList.Axis = layout.Horizontal
+	return charList.Layout(gtx, count, func(gtx layout.Context, charIndex int) layout.Dimensions {
+		var charStr string
+		if charIndex < len(runes) {
+			charStr = string(runes[charIndex])
+		} else {
+			charStr = " "
+		}
+
+		if charIndex != cursor.Col {
+			lbl := material.Label(theme, theme.TextSize, charStr)
+			lbl.Color = theme.Palette.Fg
+			return lbl.Layout(gtx)
+		}
+		return renderCursorCell(gtx, theme, charStr, cursor.Mode)
+	})
+}
+
+// renderCursorCell draws the cursor's own cell: a thin pipe/bar in Insert
+// mode (matches vim's insertion-point caret), a solid block otherwise
+// (Normal/Visual/Command).
+func renderCursorCell(gtx layout.Context, theme *material.Theme, charStr string, mode types.Mode) layout.Dimensions {
+	if mode == types.ModeInsert {
+		return layout.Stack{}.Layout(gtx,
+			layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(theme, theme.TextSize, charStr)
+				lbl.Color = theme.Palette.Fg
+				return lbl.Layout(gtx)
+			}),
+			layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+				bar := gtx.Constraints.Min
+				bar.X = gtx.Dp(2)
+				defer clip.Rect{Max: bar}.Push(gtx.Ops).Pop()
+				paint.ColorOp{Color: theme.Palette.ContrastBg}.Add(gtx.Ops)
+				paint.PaintOp{}.Add(gtx.Ops)
+				return layout.Dimensions{Size: gtx.Constraints.Min}
+			}),
+		)
+	}
+
+	return layout.Stack{Alignment: layout.Center}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			defer clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops).Pop()
+			paint.ColorOp{Color: theme.Palette.ContrastBg}.Add(gtx.Ops)
+			paint.PaintOp{}.Add(gtx.Ops)
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(theme, theme.TextSize, charStr)
+			lbl.Color = theme.Palette.ContrastFg
+			return lbl.Layout(gtx)
+		}),
+	)
+}
+
+// completionWindow bounds candidates to at most maxRows entries, keeping
+// index always visible — a scrolling window rather than truncating the
+// list to whatever fits at the top, so cycling past the initial screenful
+// still shows where the selection actually is.
+func completionWindow(candidates []string, index, maxRows int) ([]string, int) {
+	if len(candidates) <= maxRows {
+		return candidates, index
+	}
+	start := index - maxRows + 1
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxRows
+	if end > len(candidates) {
+		end = len(candidates)
+		start = end - maxRows
+	}
+	return candidates[start:end], index - start
+}
+
+// renderCompletionPopup draws the :e/:w candidate list — vim's wildmenu,
+// essentially — above the status bar while a completion cycle
+// (Editor.TriggerCompletion) is active. Zero-size when it isn't, so it
+// takes no layout space.
+func renderCompletionPopup(gtx layout.Context, theme *material.Theme, cursor editor.Cursor) layout.Dimensions {
+	completion := cursor.Completion
+	if !completion.Active || len(completion.Candidates) == 0 {
+		return layout.Dimensions{}
+	}
+	windowed, selected := completionWindow(completion.Candidates, completion.Index, maxCompletionRows)
+
+	children := make([]layout.FlexChild, len(windowed))
+	for i, candidate := range windowed {
+		candidate := candidate
+		isSelected := i == selected
+		children[i] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if !isSelected {
+				lbl := material.Label(theme, theme.TextSize, candidate)
+				lbl.Color = theme.Palette.Fg
+				return lbl.Layout(gtx)
+			}
+			return layout.Stack{}.Layout(gtx,
+				layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+					defer clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops).Pop()
+					paint.ColorOp{Color: theme.Palette.ContrastBg}.Add(gtx.Ops)
+					paint.PaintOp{}.Add(gtx.Ops)
+					return layout.Dimensions{Size: gtx.Constraints.Min}
+				}),
+				layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(theme, theme.TextSize, candidate)
+					lbl.Color = theme.Palette.ContrastFg
+					return lbl.Layout(gtx)
+				}),
+			)
+		})
+	}
+
+	popupBg := color.NRGBA{R: 0x24, G: 0x28, B: 0x3b, A: 0xff} // Tokyo Night darker background, matches the status bar
+
+	return layout.Stack{}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			defer clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops).Pop()
+			paint.ColorOp{Color: popupBg}.Add(gtx.Ops)
+			paint.PaintOp{}.Add(gtx.Ops)
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+		}),
+	)
+}
+
+func renderStatusBar(gtx layout.Context, theme *material.Theme, ed *editor.Editor, cursor editor.Cursor) layout.Dimensions {
+	statusBarBg := color.NRGBA{R: 0x24, G: 0x28, B: 0x3b, A: 0xff} // Tokyo Night darker status background
+
+	return layout.Stack{}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			defer clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops).Pop()
+			paint.ColorOp{Color: statusBarBg}.Add(gtx.Ops)
+			paint.PaintOp{}.Add(gtx.Ops)
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			if cursor.Mode == types.ModeCommand {
+				lbl := material.Label(theme, theme.TextSize, fmt.Sprintf(" :%s", cursor.CommandBuffer))
+				lbl.Color = theme.Palette.ContrastBg
+				return lbl.Layout(gtx)
+			}
+
+			var modeColor color.NRGBA
+			switch cursor.Mode {
+			case types.ModeNormal:
+				modeColor = color.NRGBA{R: 0xe0, G: 0xaf, B: 0x68, A: 0xff} // Yellow
+			case types.ModeInsert:
+				modeColor = color.NRGBA{R: 0x9e, G: 0xce, B: 0x6a, A: 0xff} // Green
+			case types.ModeVisual:
+				modeColor = color.NRGBA{R: 0xbb, G: 0x9a, B: 0xf7, A: 0xff} // Purple
+			default:
+				modeColor = theme.Palette.Fg
+			}
+
+			children := []layout.FlexChild{
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(theme, theme.TextSize, fmt.Sprintf(" -- %s -- ", cursor.Mode.String()))
+					lbl.Color = modeColor
+					return lbl.Layout(gtx)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(theme, theme.TextSize, fmt.Sprintf(" | Row: %d  Col: %d | Offset: %d ", cursor.Row, cursor.Col, cursor.ByteOffset))
+					lbl.Color = theme.Palette.Fg
+					return lbl.Layout(gtx)
+				}),
+			}
+			// Surface why a command like :q was refused (e.g. unsaved
+			// changes) — ErrQuit itself isn't an error worth showing, the
+			// window is about to close.
+			if err := ed.GetLastCommandError(); err != nil && err != editor.ErrQuit {
+				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(theme, theme.TextSize, fmt.Sprintf(" | %s", err))
+					lbl.Color = color.NRGBA{R: 0xf7, G: 0x76, B: 0x8e, A: 0xff} // red
+					return lbl.Layout(gtx)
+				}))
+			}
+
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
+		}),
+	)
 }

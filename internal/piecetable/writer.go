@@ -7,12 +7,13 @@ func (s *Table) Insert(offset int, data []byte) {
 		return
 	}
 	// 1. Save history
-	s.History = append(
-		s.History,
-		State{
-			Pieces: append([]Piece{}, s.Pieces...),
-			AddLen: len(s.Add),
-		})
+	s.history = append(s.history, historyEntry{
+		snapshot: State{Pieces: append([]Piece{}, s.Pieces...), AddLen: len(s.Add)},
+		edit:     Edit{Offset: offset, OldLength: 0, NewLength: len(data)},
+	})
+	// A new edit invalidates any pending redo.
+	s.redoStack = nil
+	s.Dirty = true
 
 	// 2. Add to AddBuffer
 	addStart := len(s.Add)
@@ -54,12 +55,13 @@ func (s *Table) Delete(start, length int) {
 	}
 
 	// Save history
-	s.History = append(
-		s.History,
-		State{
-			Pieces: append([]Piece{}, s.Pieces...),
-			AddLen: len(s.Add),
-		})
+	s.history = append(s.history, historyEntry{
+		snapshot: State{Pieces: append([]Piece{}, s.Pieces...), AddLen: len(s.Add)},
+		edit:     Edit{Offset: start, OldLength: length, NewLength: 0},
+	})
+	// A new edit invalidates any pending redo.
+	s.redoStack = nil
+	s.Dirty = true
 
 	var newPieces []Piece
 	end := start + length
@@ -124,16 +126,58 @@ func (s *Table) coalesceUnlocked() {
 	s.Pieces = coalesced
 }
 
-func (s *Table) Undo() bool {
+// Undo reverts the most recent edit, restoring the snapshot from before it
+// happened and returning the Edit describing what changed as a result —
+// the inverse of the original edit, since undoing an insert makes text
+// disappear and undoing a delete brings it back. ok is false if there's
+// nothing to undo.
+func (s *Table) Undo() (Edit, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.History) == 0 {
-		return false
+	if len(s.history) == 0 {
+		return Edit{}, false
 	}
-	lastState := s.History[len(s.History)-1]
-	s.History = s.History[:len(s.History)-1]
 
-	s.Pieces = lastState.Pieces
-	s.Add = s.Add[:lastState.AddLen]
-	return true
+	entry := s.history[len(s.history)-1]
+	s.history = s.history[:len(s.history)-1]
+
+	// Stash the state we're stepping away from, paired with the same
+	// edit, so a later Redo can restore it and report it correctly.
+	s.redoStack = append(s.redoStack, historyEntry{
+		snapshot: State{Pieces: append([]Piece{}, s.Pieces...), AddLen: len(s.Add)},
+		edit:     entry.edit,
+	})
+
+	s.Pieces = entry.snapshot.Pieces
+	s.Add = s.Add[:entry.snapshot.AddLen]
+	s.Dirty = true
+	return entry.edit.Inverse(), true
+}
+
+// Redo re-applies the last edit undone by Undo, returning that edit
+// unchanged (redoing moves forward, the same direction the edit
+// originally happened in). It's invalidated (cleared) by any new
+// Insert/Delete, matching standard editor behavior — you can't redo into
+// a future that a new edit has already overwritten.
+func (s *Table) Redo() (Edit, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.redoStack) == 0 {
+		return Edit{}, false
+	}
+
+	entry := s.redoStack[len(s.redoStack)-1]
+	s.redoStack = s.redoStack[:len(s.redoStack)-1]
+
+	// Stash the state we're stepping away from onto history, so a
+	// subsequent Undo can reverse this redo exactly like any other edit.
+	s.history = append(s.history, historyEntry{
+		snapshot: State{Pieces: append([]Piece{}, s.Pieces...), AddLen: len(s.Add)},
+		edit:     entry.edit,
+	})
+
+	s.Pieces = entry.snapshot.Pieces
+	s.Add = s.Add[:entry.snapshot.AddLen]
+	s.Dirty = true
+	return entry.edit, true
 }

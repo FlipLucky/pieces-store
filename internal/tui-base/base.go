@@ -8,8 +8,28 @@ import (
 	"github.com/rivo/tview"
 
 	"github.com/fliplucky/pieces-store/internal/editor"
-	"github.com/fliplucky/pieces-store/internal/viewmanager"
+	"github.com/fliplucky/pieces-store/internal/types"
 )
+
+// completionWindow bounds candidates to at most maxRows entries, keeping
+// index always visible — a scrolling window rather than truncating the
+// list to whatever fits at the top, so cycling past the initial screenful
+// still shows where the selection actually is.
+func completionWindow(candidates []string, index, maxRows int) ([]string, int) {
+	if len(candidates) <= maxRows {
+		return candidates, index
+	}
+	start := index - maxRows + 1
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxRows
+	if end > len(candidates) {
+		end = len(candidates)
+		start = end - maxRows
+	}
+	return candidates[start:end], index - start
+}
 
 func Boot(ed *editor.Editor) error {
 	app := tview.NewApplication()
@@ -31,16 +51,27 @@ func Boot(ed *editor.Editor) error {
 	editorView.SetBackgroundColor(tokyoBg)
 	editorView.SetTextColor(tokyoFg)
 
+	// :e/:w completion popup — collapsed to 0 height (via ResizeItem in
+	// renderContent) whenever no completion is in progress.
+	completionView := tview.NewTextView().
+		SetDynamicColors(true)
+	completionView.SetBackgroundColor(tokyoStatusBg)
+	completionView.SetTextColor(tokyoFg)
+
 	// Bottom Vim status bar
 	statusBar := tview.NewTextView().
 		SetDynamicColors(true)
 	statusBar.SetBackgroundColor(tokyoStatusBg)
 
-	// Layout: editor filling top space, status bar occupying 1 row at bottom
+	// Layout: editor filling top space, completion popup + status bar at
+	// the bottom.
 	flex := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(editorView, 0, 1, true).
+		AddItem(completionView, 0, 0, false).
 		AddItem(statusBar, 1, 0, false)
+
+	const maxCompletionRows = 8
 
 	// Function to rebuild rendering text with cursor block highlight
 	renderContent := func() {
@@ -83,17 +114,39 @@ func Boot(ed *editor.Editor) error {
 
 		editorView.SetText(strings.Join(formattedLines, "\n"))
 
-		if cursor.Mode == viewmanager.ModeCommand {
+		if completion := cursor.Completion; completion.Active && len(completion.Candidates) > 0 {
+			windowed, selected := completionWindow(completion.Candidates, completion.Index, maxCompletionRows)
+			var b strings.Builder
+			for i, candidate := range windowed {
+				if i > 0 {
+					b.WriteString("\n")
+				}
+				if i == selected {
+					b.WriteString("[#1a1b26:#7aa2f7]")
+					b.WriteString(candidate)
+					b.WriteString("[#a9b1d6:#1a1b26]")
+				} else {
+					b.WriteString(candidate)
+				}
+			}
+			completionView.SetText(b.String())
+			flex.ResizeItem(completionView, len(windowed), 0)
+		} else {
+			completionView.SetText("")
+			flex.ResizeItem(completionView, 0, 0)
+		}
+
+		if cursor.Mode == types.ModeCommand {
 			statusBar.SetText(fmt.Sprintf(" [#7aa2f7]:%s[white]", cursor.CommandBuffer))
 		} else {
 			// Update bottom status bar with color-coded modes
 			var modeStr string
 			switch cursor.Mode {
-			case viewmanager.ModeNormal:
+			case types.ModeNormal:
 				modeStr = "[#e0af68]-- NORMAL --[white]" // Yellow
-			case viewmanager.ModeInsert:
+			case types.ModeInsert:
 				modeStr = "[#9ece6a]-- INSERT --[white]" // Green
-			case viewmanager.ModeVisual:
+			case types.ModeVisual:
 				modeStr = "[#bb9af7]-- VISUAL --[white]" // Purple
 			default:
 				modeStr = cursor.Mode.String()
@@ -127,6 +180,14 @@ func Boot(ed *editor.Editor) error {
 			keyStr = "<BS>"
 		case tcell.KeyEnter:
 			keyStr = "<Enter>"
+		case tcell.KeyCtrlR:
+			keyStr = "<C-r>"
+		case tcell.KeyTab:
+			keyStr = "<Tab>"
+		case tcell.KeyCtrlN:
+			keyStr = "<C-n>"
+		case tcell.KeyCtrlP:
+			keyStr = "<C-p>"
 		default:
 			if event.Rune() != 0 {
 				keyStr = string(event.Rune())

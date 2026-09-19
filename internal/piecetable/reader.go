@@ -64,30 +64,54 @@ func (s *Table) GetText() string {
 	return s.CombinePieces()
 }
 
+// GetRange returns the bytes in [start, end). Both bounds are clamped to
+// the document's actual length, and a reversed or fully out-of-range
+// request returns an empty (nil) slice rather than panicking — this is
+// meant to be called every frame once viewport rendering exists, so it
+// needs to survive off-by-one viewport math, not just well-formed input.
 func (s *Table) GetRange(start, end int) []byte {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	total := 0
+	for _, p := range s.Pieces {
+		total += p.Length
+	}
+
+	if start < 0 {
+		start = 0
+	}
+	if end > total {
+		end = total
+	}
+	if end <= start {
+		return nil
+	}
+
 	var result []byte
 	currentOffset := 0
 	for _, p := range s.Pieces {
+		pieceEnd := currentOffset + p.Length
 
-		relativeStart := max(0, start-currentOffset)
-		relativeEnd := min(p.Length, end-currentOffset)
+		// Piece is entirely outside the requested range — skip it rather
+		// than slicing with (implicitly) reversed bounds.
+		if pieceEnd > start && currentOffset < end {
+			relativeStart := max(0, start-currentOffset)
+			relativeEnd := min(p.Length, end-currentOffset)
 
-		bufferStart := p.Start + relativeStart
-		bufferEnd := p.Start + relativeEnd
-		if p.BufferType == Master {
-			result = append(result, s.Master[bufferStart:bufferEnd]...)
-		} else {
-			result = append(result, s.Add[bufferStart:bufferEnd]...)
+			bufferStart := p.Start + relativeStart
+			bufferEnd := p.Start + relativeEnd
+			if p.BufferType == Master {
+				result = append(result, s.Master[bufferStart:bufferEnd]...)
+			} else {
+				result = append(result, s.Add[bufferStart:bufferEnd]...)
+			}
 		}
-		currentOffset += p.Length
 
+		currentOffset = pieceEnd
 		if currentOffset >= end {
 			break
 		}
 	}
 	return result
-
 }

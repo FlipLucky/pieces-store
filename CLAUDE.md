@@ -15,7 +15,10 @@ The project is small and mid-refactor (see "Known issues" below) — treat this
 file, not `README.md`/`CONCEPTUAL_GUIDE.md`, as the source of truth for
 current package structure. See `BACKLOG.md` for known, deliberately-deferred
 issues that don't block the current phase — pick those up opportunistically
-or when they actually bite, not proactively.
+or when they actually bite, not proactively. See `FEATURES.md` for the
+product-facing view (what the editor actually does today, how it got here,
+and where it's going) — this file's Known Issues section is the
+engineering log, `FEATURES.md` is the roadmap.
 
 ## Vision & direction
 
@@ -115,18 +118,14 @@ reached** (same rule already applied to platform targets above).
 
 ### Path to stage 1 (agreed 2026-09-06)
 
-1. **Finish the key engine foundation** (`key_engine.go`). Focus is the
-   *mechanism*, not full keybinding coverage — keybindings get added along
-   the way, some now, more later. Concrete exit test (not a feeling):
-   adding a couple of new keybindings (e.g. a movement verb, a new text
-   object) should require only *data* — a table entry plus a resolver — no
-   dispatch-logic changes. `u` (undo) needs real backing here, which means
-   the still-open undo/redo model decision (see below) will likely get
-   forced during this phase rather than staying comfortably deferred.
-   While here, also just fix (don't defer) two small, cheap items: wire the
-   already-existing `anchors` parameter into `MoveCursorUp`/`MoveCursorDown`
-   instead of always rescanning from offset 0, and add the missing bounds
-   guard in `MoveCursorDown` (no guard symmetric to `MoveCursorUp`'s).
+1. ~~**Finish the key engine foundation**~~ **Done 2026-09-13** — see
+   Current phase. Exit test was met: `w`/`b`/`e`/`u`/`<C-r>` (and the rest
+   of the 14-case list) are all data (table entries + resolvers) on top of
+   the same dispatch mechanism, no dispatch-logic changes needed per
+   keybinding. The undo/redo model got decided as part of this (symmetric
+   redo stack on `piecetable.Table`, not the bigger action-log redesign —
+   see `piecetable/writer.go`'s `Undo`/`Redo`). The two cheap fixes
+   (`anchors` wiring, `MoveCursorDown` bounds guard) are done too.
 2. **Audit for contradictions with the core principles** (chiefly
    performance) before frontend work resumes — not a full re-audit, a
    targeted check for anything that actively fights the architecture.
@@ -134,13 +133,15 @@ reached** (same rule already applied to platform targets above).
    piece table's O(P) linear scan (`FindPieceAt`) is deliberately deferred
    because once viewport slicing exists it scales with piece count from
    editing activity, not file size — genuinely low-priority for a
-   single-file MVP session, not a blocker being ignored.
-3. **Make both front ends actually functional** (`gui-base`, `tui-base`) —
-   this is where `gui-base` finally gets rewired through the key engine
-   instead of its own inline key handling. A backend without a usable
-   front end has no value to an actual user (even if that user is just the
-   author, or an alpha release) — this is the point of the whole exercise,
-   not a nice-to-have once the backend is "perfect."
+   single-file MVP session, not a blocker being ignored. (Two real
+   correctness bugs were found and fixed as a side effect of building the
+   executor, not from a dedicated audit pass — see `internal/offset`'s
+   `spanStart`/`RangeInnerWord`/`MotionWordBackward` history.)
+3. ~~**Make both front ends actually functional**~~ **Done 2026-09-19** —
+   `gui-base` now routes every keystroke through `Editor.HandleKey`/
+   `InsertLiteralText` (see Current phase and Known issues history), the
+   same as `tui-base` already did. Both front ends can open/save/quit, run
+   the full 14-case keybinding list, and undo/redo for real.
 
 Stage 1 (MVP) is reached once the above three hold. From there, proceed
 through the numbered stages below, staying value-driven per release rather
@@ -183,15 +184,31 @@ than jumping straight to full IDE breadth.
    its own subsystem, likely later than stage 3.
 
 **Still genuinely open, not yet addressed by any stage above:**
-- **Undo/redo model** — action-log-based (undo replays the inverse of the
-  last action, redo re-applies it) vs. staying snapshot-based. Raised early
-  on, never settled.
+- ~~**Undo/redo model**~~ **Settled 2026-09-19** — stayed snapshot-based
+  (not the full action-log rewrite once floated) but each `historyEntry`
+  now also carries the precise `Edit{Offset, OldLength, NewLength}` that
+  produced it, so `Undo`/`Redo` report an exact reversible delta instead
+  of just restoring a snapshot with no idea what changed. Forced by the
+  treesitter/LSP audit below — incremental re-parsing and `didChange`
+  both need exactly this shape, and diffing two full snapshots to
+  reconstruct it on every undo would have been real per-undo cost on a
+  large file. See `piecetable/table.go`'s `Edit`/`historyEntry` and
+  `writer.go`'s `Undo`/`Redo`.
 - **Concurrency/async orchestration** — how the synchronous, single-mutex
   editor core reconciles late-arriving async results (LSP diagnostics,
   background indexing, file-watcher events) without freezing the UI or
-  racing edits. Partially de-risked by the multi-buffer shape aligning with
-  LSP's per-document model, but the scheduling question itself is
-  unaddressed — correctly so, until LSP's actual behavior is well
+  racing edits. `Editor.ChangeChan()` now carries a real payload
+  (`ChangeEvent{Edit}`, settled 2026-09-19 alongside the undo/redo fix
+  above) instead of a bare `chan struct{}`, so a future consumer can at
+  least learn *what* changed — but it's still explicitly a coalescing,
+  best-effort "please redraw" channel (a burst of edits collapses to the
+  latest one, by design — see its doc comment), not a lossless ordered
+  stream. Anything that must see every edit exactly once, in order (e.g.
+  incremental treesitter re-parsing), needs a separate, non-coalescing
+  mechanism that doesn't exist yet. Partially de-risked by the
+  multi-buffer shape aligning with LSP's per-document model, but the
+  scheduling question itself is unaddressed — correctly so, until LSP's
+  actual behavior is well
   understood.
 - **Plugin API surface breadth** — the uniform blackbox-attachment
   discipline (every capability, frontend or not, attaches to the editor's
@@ -245,7 +262,7 @@ GUIs and Lua plugins, not a separate surface bolted on next to it.
 
 **Action + offset**: the piece table only ever knows an offset
 (`start, length`) and an action (`Insert`/`Delete`) applied to it. The
-keybinding architecture (see `internal/editor/key_engine.go` below) is
+keybinding architecture (see `internal/keyengine` below) is
 designed to reduce every vim-style verb/modifier/noun combination — and
 eventually the rendering viewport — to that same shape: a motion/text-object
 *resolves* an offset, and a verb *applies* an action to it. The same
@@ -259,11 +276,41 @@ Front ends were wired up early "for gratification" and have since been
 deliberately backgrounded while the editor/piece-table core got priority. A
 full backend audit (piecetable, editor, keymap, viewmanager) was completed
 2026-09-06 against the principles above, aimed at reaching "backend works
-properly enough for a decent frontend MVP" — see Known issues below for the
-resulting findings. **Before frontend work resumes**, the plan is to finish
-the keybinding engine (`internal/editor/key_engine.go`, see Architecture
-below) and work through the backend punch list. Don't jump straight into
-frontend fixes unprompted.
+properly enough for a decent frontend MVP."
+
+**The keybinding engine is now finished and wired in (as of 2026-09-13)**:
+`internal/editor/keymap` (the old, crude first implementation) has been
+deleted entirely; `internal/keyengine` (see Architecture below) is the live
+path, reached via `Editor.HandleKey` → mode-dispatch → executor
+(`internal/editor/dispatch.go`). All 14 originally-agreed keybindings
+(`diw`, `daw`, `dip`, `dd`, `w`, `b`, `e`, `u`, `<C-r>`, `r`, `:`, `i`, `o`,
+`O`) work end-to-end through a real `Editor`, verified by tests that
+actually type sequences through `HandleKey` and check resulting
+text/cursor/mode state, not just parser-level unit tests. Undo/Redo is
+real (`piecetable.Table.Redo`, a symmetric redo stack — see Known issues
+history), and `:q` now refuses on unsaved changes (`:q!` force-quits).
+
+**`gui-base` is now wired through the engine too (as of 2026-09-19)**:
+`internal/gui-base/base.go` was rebuilt to route every keystroke through
+`Editor.HandleKey` (translating Gio's `key.EditEvent`/`key.Event` into the
+same key-string vocabulary `tui-base` already used), call
+`Editor.InsertLiteralText` for multi-rune paste/IME chunks (dropped
+outside Insert mode, per `InsertLiteralText`'s own contract), and render
+via the new `Editor.Viewport`/`viewmanager.ViewportSlice` (a scroll
+position that follows the cursor, plus margin) instead of full-buffer
+`GetText()` + `strings.Split` on every frame. It also gained a block
+cursor in Normal/Visual/Command modes vs. a pipe/bar cursor in Insert
+mode, matching vim's own convention, and a status-bar line for
+`GetLastCommandError()` (e.g. why `:q` was refused). Stage 1 (MVP) per the
+Roadmap is now reached: both front ends are real, functional editors on
+top of the same engine, not just `tui-base` alone.
+
+**Next up**: none of the MVP staging items are individually assigned yet
+— see the Roadmap's numbered stages (1. MVP polish/find-replace, 2.
+markdown/HTML+treesitter/LSP, ...) for what's next in line, plus
+`BACKLOG.md`/Known issues for anything that surfaces opportunistically.
+Visual mode (Known issues item 2) and `tui-base`'s still-naive full-buffer
+render (Known issues item 3) are the most likely near-term picks.
 
 ## Module & toolchain
 
@@ -278,9 +325,13 @@ frontend fixes unprompted.
 ## Architecture / package map
 
 ```
-cmd/gui, cmd/tui  →  gui-base / tui-base  →  editor  →  keymap, piecetable, viewmanager
-cmd/api           →  piecestore (deleted — broken, see Known issues)
+cmd/gui, cmd/tui  →  gui-base / tui-base  →  editor  →  keyengine, offset, piecetable, viewmanager
+cmd/api           →  piecetable (see Known issues — cmd/api's role is undetermined but no longer broken)
 ```
+
+`offset` and `keyengine` are both leaf packages (zero internal dependencies
+of their own — `keyengine` needs only `types`) — deliberately, so neither
+can end up in a dependency cycle with `editor` or with each other.
 
 - **`cmd/gui`, `cmd/tui`** — working entry points. Each builds an
   `editor.Editor` (`editor.NewEditor(...)` or `editor.NewEditorFromFile(path)`)
@@ -291,47 +342,107 @@ cmd/api           →  piecestore (deleted — broken, see Known issues)
   long-term role is undetermined but may become an extensibility/scripting
   entry point (see Vision & direction).
 - **`internal/piecetable`** — the core text data structure: `Table` holds
-  `Master`/`Add` byte buffers plus a `Pieces` list; `Insert`/`Delete`/`Undo`
-  mutate it with history-based undo, `Coalesce` merges adjacent same-buffer
-  pieces. Also handles file load/save (`NewPieceTableFromFile`, `Save`,
-  `SaveAs`). This is a mutex-protected rewrite of the older, now-deleted
-  `internal/piecestore` package (`Store` → `Table`).
+  `Master`/`Add` byte buffers plus a `Pieces` list; `Insert`/`Delete`
+  mutate it, `Coalesce` merges adjacent same-buffer pieces. `Undo`/`Redo`
+  are snapshot-based (each unexported `historyEntry` restores a full
+  `State` directly, no replay) but each entry also carries the `Edit`
+  that produced it (`Edit{Offset, OldLength, NewLength}`), so `Undo`/`Redo`
+  return the precise reversible delta rather than leaving callers to
+  diff two snapshots to find out what changed (settled 2026-09-19, see
+  Roadmap's "Still genuinely open" history). Also handles file load/save
+  (`NewPieceTableFromFile`, `Save`, `SaveAs`). This is a mutex-protected
+  rewrite of the older, now-deleted `internal/piecestore` package
+  (`Store` → `Table`).
 - **`internal/editor`** — the orchestrator: `Editor` wraps a
-  `*piecetable.Table`, a `*viewmanager.RuneCalculator`/`VirtualGrid`/`Cursor`,
-  and (currently) a `*keymap.Router`. Public surface: text ops (`InsertText`,
-  `DeleteText`, `GetText`), cursor movement, file I/O, vim-style command mode
-  (`:w`, `:e`, `:q`, `:wq` via `ExecuteCommand`), `Undo`, and `HandleKey`
-  (forwards to the keymap router — see below, this is expected to change).
-  This is "the point of contact for the gui or tui" per its package doc
-  comment.
-- **`internal/editor/keymap`** — **the old, crude first implementation** of
-  the keybinding engine, currently still the live wired path (`Router` walks
-  a `map[mode]map[string]*KeyNode` graph to parse verb/modifier/noun
-  sequences like `3dw`/`diw`). Confirmed by the author to be slated for
-  replacement and deletion, not repair — see `key_engine.go` below and Known
-  issues.
-- **`internal/editor/key_engine.go`** — **the intended path forward** for
-  keybindings, currently unfinished and not yet wired into `Editor`. Built on
-  an "action + offset" principle (see Design philosophy above): a
-  `CommandContext` parses verb/modifier/noun key sequences against semantic
-  tables (`CreateVerbs`/`CreateModifiers`/`CreateNouns`) cross-checked
-  against a per-key whitelist (`KeyAction.allowedKeyActions`), producing an
-  `ExecutableCommand{Count, Verb, Modifier, Noun}`. Not yet implemented:
-  offset resolution (wiring in `viewmanager.RuneCalculator`'s motion
-  functions), an execution/dispatch step that applies the resulting action
-  via `piecetable`/`editor`, most verb/modifier/noun table entries, and
-  removal of `internal/editor/keymap` once this replaces it. See Known
-  issues for the concrete gaps found in the 2026-09-06 audit.
-- **`internal/viewmanager`** — presentation/position math extracted out of
-  `internal/editor`: `Cursor`/`Mode` (Normal/Insert/Visual/Command),
-  `RuneCalculator` (UTF-8-aware byte-offset ↔ row/col conversion and vim
-  motions like word-forward/back, inner-word ranges), and `VirtualGrid`
-  (viewport mapping — currently a no-op passthrough, see Known issues).
+  `*piecetable.Table`, a `*viewmanager.VirtualGrid`, a local `*Cursor`
+  (`cursor.go` — position/mode/command-buffer; moved here from
+  `viewmanager` since it's editor state, not view state), and a
+  `*keyengine.CommandContext`. `HandleKey` (in `dispatch.go`) is the single
+  entry point for all keyboard input: it routes on mode — Insert/Command
+  mode capture keys literally (no vim grammar applies to "just type this
+  character"); Normal (and eventually Visual) mode hands the key to
+  `keyengine.CommandContext.ProcessCommand`, and once a sequence resolves,
+  `execute()` (also in `dispatch.go`) resolves the command's offset/range
+  via `internal/offset` and applies the verb via `piecetable`/`Editor`.
+  Also handles file I/O, vim-style command mode (`:w`, `:e`, `:q`/`:q!`,
+  `:wq` via `ExecuteCommand`), and `Undo`/`Redo`. This is "the point of
+  contact for the gui or tui" per its package doc comment.
+- **`internal/keyengine`** — parses vim-style keystroke sequences into a
+  resolved `ExecutableCommand{Count, Verb, Modifier, Noun}`. Zero
+  dependency on `piecetable`, `offset`, or `Editor` — keystrokes in, a
+  command (or an `ErrInconsistentKeymap` error) out. Split across
+  `keyengine.go` (core parser: `CommandContext.ProcessCommand`, the
+  verb→modifier→noun state machine, the generic doubled-verb check for
+  `dd`/future `yy`/`cc`), `normal_mode.go` (the real, populated tables), and
+  `visual_mode.go` (placeholder scaffolding — no Visual keybinding is
+  implemented yet, see Known issues). A fourth table beyond
+  verb/modifier/noun, `availableDirects`
+  (`map[string]DirectAction{Verb, Modifier, Noun}`), covers keys that
+  execute immediately with no further input: `w`/`b`/`e` (silent motions,
+  reusing the same noun identities `diw`/`daw` resolve), `u`/`<C-r>`/`r`
+  (editor-level commands), `:`/`i`/`o`/`O` (mode switches / line-opening).
+  This replaced `internal/editor/keymap` (deleted 2026-09-13) entirely.
+- **`internal/offset`** — text-position/structure math, with zero
+  dependency on anything else in the module (usable by cursor movement,
+  the key engine's resolvers, or anything else that ever needs "where does
+  this word/paragraph start and end," e.g. a future double-click-to-select
+  word — independent of vim keybindings). `position.go`: byte↔`Position`
+  (row/col) conversion, UTF-8-safe rune stepping (`MoveLeft`/`MoveRight`).
+  `motions.go`: `FindOffset` (the shared scanning primitive — "the main
+  magic for keybindings"), predicates, and the vim motion/text-object
+  resolvers built on it (`MotionWordForward`/`Backward`/`End`,
+  `RangeInnerWord`/`AroundWord`/`Paragraph`, `RangeLine`,
+  `MotionFindCharForward`). `ScanUntil` is still dead code (see Known
+  issues, unchanged).
+- **`internal/viewmanager`** — screen/viewport mapping, nothing else
+  (slimmed 2026-09-13 — `Cursor` moved to `editor`, position math and
+  motion resolvers moved to `offset`). `VirtualGrid`/`GetScreenPosition`
+  (per-position mapping — currently a no-op passthrough, see Known issues)
+  and `viewport.go`'s `ViewportSlice(doc, topRow, visibleRows, margin)` (a
+  windowed read: just the lines worth rendering, recomputed fresh on every
+  call — deliberately uncached, since `piecetable.GetRange` on a
+  viewport-sized range is already cheap regardless of document size).
+  Exposed to frontends via `Editor.Viewport(...)`, not called directly —
+  same decoupling reasoning as everywhere else in this package map.
 - **`internal/gui-base`**, **`internal/tui-base`** — thin, single-file
   (`base.go`) front ends, one per toolkit. Both hold an `*editor.Editor` and
-  render a Tokyo Night–themed view + status bar. `tui-base` routes all
-  keystrokes through `ed.HandleKey` (i.e. the keymap router); `gui-base` does
-  **not** — it hand-rolls its own key handling inline (see Known issues).
+  render a Tokyo Night–themed view + status bar, and both route every
+  keystroke through `ed.HandleKey` (`gui-base` translates Gio's
+  `key.EditEvent`/`key.Event` into the same key-string vocabulary
+  `tui-base` gets natively from tcell; multi-rune `key.EditEvent` text —
+  paste/IME — goes through `ed.InsertLiteralText` instead). `gui-base`
+  renders via `Editor.Viewport` (windowed, scroll-follows-cursor) with a
+  block/pipe cursor per mode; `tui-base` still does full-buffer
+  `GetText()` + `strings.Split` every frame (see Known issues item 3). Both
+  also render a wildmenu-style completion popup for `:e`/`:w` path
+  completion above the status bar: `<Tab>` (`Editor.TriggerCompletion`)
+  starts a cycle or confirms the current selection — descending into it
+  (a fresh candidate list one directory deeper) if it's a directory,
+  ending the cycle if it's a file — while `<C-n>`/`<C-p>`
+  (`Editor.CycleCompletion`) only move the highlighted selection within
+  the current list without ever descending. Windowed to
+  `maxCompletionRows` so a large directory doesn't blow up the popup.
+  - **Gio-specific gotchas worth knowing before touching `gui-base`'s key
+    handling again** (all three cost real debugging time to find,
+    2026-09-19): (1) a tag only receives `key.EditEvent` — the event
+    carrying actual typed text — once something registers a
+    `key.FocusFilter{Target: tag}` for it; without that, the router's
+    `keyQueue.Frame` strips focus from the tag every single frame
+    regardless of `key.FocusCmd`, so text input silently never arrives.
+    (2) a bare `Tab` keypress is intercepted by Gio itself as a reserved
+    system key for widget-to-widget focus cycling, and is deliberately
+    withheld from a wildcard `key.Filter{}` — it must be claimed by name
+    (`key.Filter{Name: key.NameTab}`) or it never reaches the app at all.
+    (3) a wildcard `key.Filter{}` only matches events with *zero*
+    modifiers — `keyFilterMatch` rejects any modifier bit not covered by
+    the filter's `Required`/`Optional` fields, which default to zero — so
+    every Ctrl-combo (`<C-r>`, `<C-n>`, `<C-p>`) was being silently
+    dropped until the filter declared `Optional: key.ModCtrl`.
+    `handleEvents`' `gtx.Event(...)` call registers all three filters
+    together for exactly these reasons. General lesson: Gio's key
+    filters are opt-in and precise by design — nothing is delivered "by
+    default," so audit any wildcard filter for what it's silently
+    excluding rather than assuming broad coverage.
 - **`platform/`** — empty placeholder for future platform-specific code.
 
 ## Build / test / run
@@ -364,59 +475,49 @@ its own config (`.air.gui.toml`, `.air.tui.toml`, `.air.dev.toml`).
 
 ## Known issues / in-progress refactor
 
-The tree is mid-refactor (piece-table renamed from `piecestore` to
-`piecetable`; cursor/grid logic split out of `internal/editor` into
-`internal/viewmanager`). Known gaps as of now:
+Resolved history, kept briefly for context: `cmd/api/main.go` failing to
+compile (fixed 2026-09-06, now imports `internal/piecetable`), the old
+`internal/editor/keymap` engine (deleted entirely 2026-09-13, replaced by
+`internal/keyengine`), `internal/editor/interfaces.go`'s orphaned
+`Document` interface (deleted), the keybinding engine's incompleteness
+(finished 2026-09-13 for the 14-case list — see Current phase), no
+Redo (`piecetable.Table.Redo` added, a symmetric redo stack), no
+dirty-tracking on `:q` (added — `Dirty` on `piecetable.Table`, `:q!` force-
+quits), `MoveCursorDown`'s missing bounds check / unused `anchors`
+param (fixed — see `editor.go`, anchoring only helps the Down direction,
+Up genuinely can't benefit from it without also tracking each line's start
+offset, see the comment there), and `gui-base` bypassing the key engine
+with its own inline key-handling switch (rebuilt 2026-09-19 to route
+through `Editor.HandleKey`/`InsertLiteralText` and render via
+`Editor.Viewport` — see Current phase).
 
-1. ~~`cmd/api/main.go` doesn't compile~~ **Fixed 2026-09-06** — now imports
-   `internal/piecetable`/`piecetable.NewPieceTable` instead of the deleted
-   `internal/piecestore`. `go build ./...` passes.
-2. **`internal/editor/key_engine.go`'s build-breaking unused import was
-   fixed 2026-09-06** (the `viewmanager` import was removed — no offset-
-   resolution wiring exists yet, so there was nothing to keep it for). This
-   is *not* dead code: it's the intended keybinding engine, still very
-   incomplete. Only 2 verbs (`d`/`c`), 1 modifier (`i`; `a` is referenced
-   but has no table entry), and 1 noun (`w`; `LineMotion`/`RuneMotion`
-   exist as enum values with no table entries) are registered; no offset
-   resolution or action-execution/dispatch step exists yet; a leading `"0"`
-   keystroke is unconditionally swallowed into the count accumulator before
-   any verb/noun lookup runs; and the design work for finishing it
-   (a `availableDirects` table for immediately-executing keys, generic
-   doubled-verb handling for `dd`/`yy`/`cc`, an error path distinguishing
-   "not a sequence" from "whitelist says yes but the semantic table has
-   nothing") is settled but not yet implemented.
-3. **`internal/editor/keymap` is the old, crude first implementation** of
-   the keybinding engine — confirmed by the author to be slated for deletion
-   once `key_engine.go` is finished and wired into `Editor.HandleKey`. Don't
-   invest in fixing bugs inside it (e.g. `diw`/`dw`/`dd`/`x` all collapsing
-   onto the same non-directional `DeleteText()` primitive, or Visual mode
-   being entirely unreachable — no registered graph, no entry keybinding) —
-   that code is being replaced, not repaired.
-4. **`internal/editor/interfaces.go`'s `Document` interface is orphaned** —
-   unused anywhere in the codebase; `viewmanager.Document` is the one
-   actually consumed by `RuneCalculator`.
-5. **`gui-base` bypasses the keymap router** — it implements its own inline
-   key-handling switch instead of calling `ed.HandleKey` like `tui-base`
-   does, and as a result cannot save or quit at all. Since GUI/TUI parity is
-   an explicit goal (see Vision & direction), this is a real bug to fix, not
-   just a stylistic inconsistency — but it should be fixed against whatever
-   replaces `internal/editor/keymap`, not against the old package.
-6. **`internal/viewmanager/virtual_grid.go`'s `GetScreenPosition` is a no-op**
-   passthrough — scroll offsets, line wrapping, tab expansion, and a
-   line-number gutter aren't implemented yet. Both front ends currently do
-   naive full-buffer `GetText()` + `strings.Split` on every keystroke *and*
-   every cursor move, which is also a significant performance concern (see
-   Design philosophy's "performance first").
-7. **Cross-cutting backend concerns found in the 2026-09-06 audit**: `piecetable.GetRuneAt`/`FindPieceAt`
-   bypass their own mutex on the actual read path (a real, if currently
-   latent, data race); `GetRange` panics on out-of-range/reversed input;
-   `Insert` with a negative offset silently misplaces instead of erroring;
-   no dirty/unsaved-changes tracking exists, so `:q` quits unconditionally;
-   there is no Redo (`Undo` destructively pops history); and cursor
-   movement/typing recompute row/col by scanning from byte offset 0 on every
-   keystroke (the `anchors` parameter `PositionToByteOffset` already exposes
-   for this is never used by any caller).
-8. **`README.md` and `CONCEPTUAL_GUIDE.md` are stale** — they predate the
-   `piecestore` → `piecetable` rename and the `viewmanager` extraction, and
-   describe outdated package/file paths. Use this file's architecture section
-   instead.
+Known gaps as of now:
+
+1. **Visual mode is unreachable** — `internal/keyengine/visual_mode.go` is
+   still the original copy-paste placeholder (not fleshed out — see the
+   comment there for why), and nothing enters Visual mode (no `v` key is
+   registered anywhere). Not in scope until Visual mode is actually needed.
+2. **`internal/viewmanager/virtual_grid.go`'s `GetScreenPosition` is a
+   no-op** passthrough — scroll offsets, line wrapping, tab expansion, and
+   a line-number gutter aren't implemented yet (distinct from
+   `ViewportSlice`, which does the line-windowing `gui-base` now uses).
+   `tui-base` still does naive full-buffer `GetText()` + `strings.Split`
+   on every keystroke *and* every cursor move — `gui-base` no longer does,
+   see Current phase — which is a real performance concern on large files
+   (see Design philosophy's "performance first") once `tui-base` gets the
+   same `Editor.Viewport` treatment.
+3. **Cross-cutting backend concerns, still open**: `piecetable.GetRuneAt`/
+   `FindPieceAt` bypass their own mutex on the actual read path (a real, if
+   currently latent, data race); `Insert` with a negative offset silently
+   misplaces instead of erroring (`GetRange` itself was fixed — it now
+   clamps out-of-range/reversed input instead of panicking, see
+   `piecetable/reader.go`/`table_test.go`'s `TestGetRange`). See
+   `BACKLOG.md` for the full sidebar list (most of these are deliberately
+   deferred, not overlooked).
+4. **`ScanUntil`** (`internal/offset/motions.go`) is still dead code — same
+   byte-stepping issue `FindOffset` used to have, looks like an abandoned
+   attempt to simplify/replace it that never got finished. Not yet decided
+   whether to delete it or complete the replacement.
+5. **`README.md` and `CONCEPTUAL_GUIDE.md` are stale** — they predate the
+   `piecestore` → `piecetable` rename and the whole `keyengine`/`offset`/
+   `viewmanager` split. Use this file's architecture section instead.

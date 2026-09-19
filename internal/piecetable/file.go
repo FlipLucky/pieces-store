@@ -36,6 +36,7 @@ func (s *Table) SaveAs(filePath string) error {
 	}
 	s.mu.Lock()
 	s.FilePath = filePath
+	s.Dirty = false
 	s.mu.Unlock()
 	return nil
 }

@@ -24,6 +24,9 @@ profile.cov
 go.work
 go.work.sum
 
+# task build's local binaries (see Taskfile.yaml's build/clean tasks)
+/tmp/
+
 # env file
 .env
 
