@@ -107,13 +107,14 @@ func (g *GioApp) Run() {
 				visibleRows := visibleRowCount(gtx, lineHeight)
 				g.topRow = followCursor(g.topRow, cursor.Row, visibleRows)
 				slice := g.editor.Viewport(g.topRow, visibleRows, viewportMargin)
+				spans := g.editor.StyleSpans(slice.StartOffset, slice.EndOffset)
 
 				layout.Flex{
 					Axis:      layout.Vertical,
 					Alignment: layout.Start,
 				}.Layout(gtx,
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						return renderBody(gtx, g.theme, slice, cursor)
+						return renderBody(gtx, g.theme, slice, spans, cursor)
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return renderCompletionPopup(gtx, g.theme, cursor)
@@ -254,31 +255,46 @@ func followCursor(topRow, cursorRow, visibleRows int) int {
 
 // renderBody lays out exactly the lines in slice — never the whole
 // document — one Flex row per line.
-func renderBody(gtx layout.Context, theme *material.Theme, slice viewmanager.Slice, cursor editor.Cursor) layout.Dimensions {
+func renderBody(gtx layout.Context, theme *material.Theme, slice viewmanager.Slice, spans []viewmanager.StyledSpan, cursor editor.Cursor) layout.Dimensions {
 	children := make([]layout.FlexChild, len(slice.Lines))
 	for i, line := range slice.Lines {
 		absRow := slice.StartRow + i
 		line := line
+		lineStart := slice.LineOffsets[i]
 		children[i] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return renderLine(gtx, theme, line, absRow, cursor)
+			return renderLine(gtx, theme, line, absRow, lineStart, spans, cursor)
 		})
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 }
 
-func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow int, cursor editor.Cursor) layout.Dimensions {
-	if absRow != cursor.Row {
+func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow, lineStart int, spans []viewmanager.StyledSpan, cursor editor.Cursor) layout.Dimensions {
+	isCursorLine := absRow == cursor.Row
+	lineSpans := viewmanager.SpansForRange(spans, lineStart, lineStart+len(line))
+
+	if !isCursorLine && len(lineSpans) == 0 {
 		lbl := material.Label(theme, theme.TextSize, line)
 		lbl.Color = theme.Palette.Fg
 		return lbl.Layout(gtx)
 	}
 
-	// The cursor's line: lay out rune by rune so exactly one cell can be
-	// styled as the cursor.
+	// This line needs per-rune treatment — either it's the cursor's line
+	// (exactly one cell styled as the cursor) or it has styled spans (or
+	// both). Lay out rune by rune either way.
 	runes := []rune(line)
 	count := len(runes)
-	if cursor.Col >= count {
+	if isCursorLine && cursor.Col >= count {
 		count++ // trailing cursor position past the last rune
+	}
+
+	// Precompute each rune's byte offset within the line up front rather
+	// than accumulating inside the layout.List callback below — the
+	// callback's invocation order isn't something to rely on.
+	byteOffsets := make([]int, len(runes))
+	acc := 0
+	for i, r := range runes {
+		byteOffsets[i] = acc
+		acc += len(string(r))
 	}
 
 	var charList layout.List
@@ -291,13 +307,44 @@ func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow i
 			charStr = " "
 		}
 
-		if charIndex != cursor.Col {
-			lbl := material.Label(theme, theme.TextSize, charStr)
-			lbl.Color = theme.Palette.Fg
-			return lbl.Layout(gtx)
+		if isCursorLine && charIndex == cursor.Col {
+			return renderCursorCell(gtx, theme, charStr, cursor.Mode)
 		}
-		return renderCursorCell(gtx, theme, charStr, cursor.Mode)
+
+		style := types.StyleNone
+		if charIndex < len(runes) {
+			style = viewmanager.StyleAt(lineSpans, lineStart+byteOffsets[charIndex])
+		}
+		lbl := material.Label(theme, theme.TextSize, charStr)
+		lbl.Color = styleColor(theme, style)
+		return lbl.Layout(gtx)
 	})
+}
+
+// styleColor maps a semantic Style to this theme's color — each frontend
+// owns this mapping itself (the same pattern renderStatusBar already uses
+// for Mode's color), keeping types.Style purely semantic and themeable.
+func styleColor(theme *material.Theme, style types.Style) color.NRGBA {
+	switch style {
+	case types.StyleKeyword:
+		return color.NRGBA{R: 0xbb, G: 0x9a, B: 0xf7, A: 0xff} // Purple
+	case types.StyleString:
+		return color.NRGBA{R: 0x9e, G: 0xce, B: 0x6a, A: 0xff} // Green
+	case types.StyleComment:
+		return color.NRGBA{R: 0x56, G: 0x5f, B: 0x89, A: 0xff} // Muted gray-blue
+	case types.StyleNumber:
+		return color.NRGBA{R: 0xff, G: 0x9e, B: 0x64, A: 0xff} // Orange
+	case types.StyleFunction:
+		return color.NRGBA{R: 0x7a, G: 0xa2, B: 0xf7, A: 0xff} // Blue
+	case types.StyleType:
+		return color.NRGBA{R: 0x2a, G: 0xc3, B: 0xde, A: 0xff} // Cyan
+	case types.StyleDiagnosticError:
+		return color.NRGBA{R: 0xf7, G: 0x76, B: 0x8e, A: 0xff} // Red
+	case types.StyleDiagnosticWarning:
+		return color.NRGBA{R: 0xe0, G: 0xaf, B: 0x68, A: 0xff} // Yellow
+	default:
+		return theme.Palette.Fg
+	}
 }
 
 // renderCursorCell draws the cursor's own cell: a thin pipe/bar in Insert

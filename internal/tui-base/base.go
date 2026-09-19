@@ -9,6 +9,7 @@ import (
 
 	"github.com/fliplucky/pieces-store/internal/editor"
 	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/pieces-store/internal/viewmanager"
 )
 
 // completionWindow bounds candidates to at most maxRows entries, keeping
@@ -29,6 +30,67 @@ func completionWindow(candidates []string, index, maxRows int) ([]string, int) {
 		start = end - maxRows
 	}
 	return candidates[start:end], index - start
+}
+
+// tviewStyleTag returns the opening color tag for style, and false for
+// types.StyleNone — nothing to wrap, same as an unstyled rune today.
+// Each frontend owns this Style -> color mapping itself, matching
+// gui-base's styleColor and how Mode's status-bar color already works.
+func tviewStyleTag(style types.Style) (string, bool) {
+	switch style {
+	case types.StyleKeyword:
+		return "[#bb9af7:#1a1b26]", true
+	case types.StyleString:
+		return "[#9ece6a:#1a1b26]", true
+	case types.StyleComment:
+		return "[#565f89:#1a1b26]", true
+	case types.StyleNumber:
+		return "[#ff9e64:#1a1b26]", true
+	case types.StyleFunction:
+		return "[#7aa2f7:#1a1b26]", true
+	case types.StyleType:
+		return "[#2ac3de:#1a1b26]", true
+	case types.StyleDiagnosticError:
+		return "[#f7768e:#1a1b26]", true
+	case types.StyleDiagnosticWarning:
+		return "[#e0af68:#1a1b26]", true
+	default:
+		return "", false
+	}
+}
+
+// styledLineText renders one line as a tview color-tagged string: the
+// cursor cell (if this is the cursor's line) takes priority over any
+// styled span at the same position, otherwise each rune gets its span's
+// color tag, or none at all — identical output to before StyledSpans
+// existed when spans is empty, since tviewStyleTag(StyleNone) is (_, false).
+func styledLineText(line string, lineStart int, spans []viewmanager.StyledSpan, isCursorLine bool, cursorCol int) string {
+	runes := []rune(line)
+	var b strings.Builder
+	byteOffset := 0
+	for i, r := range runes {
+		switch {
+		case isCursorLine && i == cursorCol:
+			// Tokyo Night cursor block styling: dark text on bright blue
+			// background, then reset to normal fg on the dark background.
+			b.WriteString("[#1a1b26:#7aa2f7]")
+			b.WriteRune(r)
+			b.WriteString("[#a9b1d6:#1a1b26]")
+		default:
+			if open, ok := tviewStyleTag(viewmanager.StyleAt(spans, lineStart+byteOffset)); ok {
+				b.WriteString(open)
+				b.WriteRune(r)
+				b.WriteString("[#a9b1d6:#1a1b26]")
+			} else {
+				b.WriteRune(r)
+			}
+		}
+		byteOffset += len(string(r))
+	}
+	if isCursorLine && cursorCol >= len(runes) {
+		b.WriteString("[#1a1b26:#7aa2f7] [#a9b1d6:#1a1b26]")
+	}
+	return b.String()
 }
 
 func Boot(ed *editor.Editor) error {
@@ -85,31 +147,25 @@ func Boot(ed *editor.Editor) error {
 		editorView.SetTitle(fmt.Sprintf(" Pieces Store TUI Editor — %s ", filePath))
 
 		lines := strings.Split(text, "\n")
-		var formattedLines []string
 
+		lineOffsets := make([]int, len(lines))
+		acc := 0
+		for i, l := range lines {
+			lineOffsets[i] = acc
+			acc += len(l) + 1
+		}
+		spans := ed.StyleSpans(0, len(text))
+
+		var formattedLines []string
 		for i, line := range lines {
-			if i == cursor.Row {
-				runes := []rune(line)
-				var builder strings.Builder
-				for j, r := range runes {
-					if j == cursor.Col {
-						// Apply Tokyo Night cursor block styling: dark text (#1a1b26) on bright blue background (#7aa2f7)
-						// Then reset text style back to normal (#a9b1d6) on dark background (#1a1b26)
-						builder.WriteString("[#1a1b26:#7aa2f7]")
-						builder.WriteRune(r)
-						builder.WriteString("[#a9b1d6:#1a1b26]")
-					} else {
-						builder.WriteRune(r)
-					}
-				}
-				// If cursor is at the end of the line (append position)
-				if cursor.Col >= len(runes) {
-					builder.WriteString("[#1a1b26:#7aa2f7] [#a9b1d6:#1a1b26]")
-				}
-				formattedLines = append(formattedLines, builder.String())
-			} else {
+			lineStart := lineOffsets[i]
+			isCursorLine := i == cursor.Row
+			lineSpans := viewmanager.SpansForRange(spans, lineStart, lineStart+len(line))
+			if !isCursorLine && len(lineSpans) == 0 {
 				formattedLines = append(formattedLines, line)
+				continue
 			}
+			formattedLines = append(formattedLines, styledLineText(line, lineStart, lineSpans, isCursorLine, cursor.Col))
 		}
 
 		editorView.SetText(strings.Join(formattedLines, "\n"))

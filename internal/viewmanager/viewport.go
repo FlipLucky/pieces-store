@@ -21,6 +21,14 @@ type Slice struct {
 	StartRow    int
 	StartOffset int
 	Lines       []string
+	// LineOffsets[i] is the absolute byte offset where Lines[i] starts —
+	// needed to place a StyledSpan (given in absolute document offsets)
+	// against a specific rune within a specific line.
+	LineOffsets []int
+	// EndOffset is the byte offset one past the last line's content —
+	// paired with StartOffset to bound a single Editor.StyleSpans call
+	// for the whole slice, rather than one call per line.
+	EndOffset int
 }
 
 // ViewportSlice returns just the lines worth rendering — topRow/visibleRows
@@ -46,9 +54,18 @@ func ViewportSlice(doc Document, topRow, visibleRows, margin int) Slice {
 		lines = lines[:n-1]
 	}
 
+	lineOffsets := make([]int, len(lines))
+	cursor := startOffset
+	for i, line := range lines {
+		lineOffsets[i] = cursor
+		cursor += len(line) + 1 // +1 for the '\n' separator
+	}
+
 	return Slice{
 		StartRow:    fetchStartRow,
 		StartOffset: startOffset,
 		Lines:       lines,
+		LineOffsets: lineOffsets,
+		EndOffset:   endOffset,
 	}
 }

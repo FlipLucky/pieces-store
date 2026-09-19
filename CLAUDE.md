@@ -382,6 +382,19 @@ can end up in a dependency cycle with `editor` or with each other.
   reusing the same noun identities `diw`/`daw` resolve), `u`/`<C-r>`/`r`
   (editor-level commands), `:`/`i`/`o`/`O` (mode switches / line-opening).
   This replaced `internal/editor/keymap` (deleted 2026-09-13) entirely.
+- **`internal/types`** — the shared kernel: small, dependency-free enums
+  every other package agrees on, imported freely but never importing
+  anything else in the module itself. `Mode` (Normal/Insert/Visual/
+  Command), `Style` (a small syntax-highlighting/diagnostic category
+  enum — see `viewmanager`'s entry below), and `Language` +
+  `DetectLanguage(filePath string)` (extension-only detection — settled
+  2026-09-19, a small starter set: Markdown/HTML/Go/JSON/JavaScript/CSS,
+  `LanguagePlainText` as the fallback for both an unsaved buffer and an
+  unrecognized extension). Exposed via `Editor.Language()`, computed
+  fresh each call rather than cached. Nothing consumes it yet — it exists
+  for a future syntax analyzer (or LSP client) to know which
+  grammar/languageId to use; this was the last treesitter-blocking gap
+  from the 2026-09-19 architecture review (see Roadmap history).
 - **`internal/offset`** — text-position/structure math, with zero
   dependency on anything else in the module (usable by cursor movement,
   the key engine's resolvers, or anything else that ever needs "where does
@@ -402,8 +415,26 @@ can end up in a dependency cycle with `editor` or with each other.
   windowed read: just the lines worth rendering, recomputed fresh on every
   call — deliberately uncached, since `piecetable.GetRange` on a
   viewport-sized range is already cheap regardless of document size).
+  `Slice` also carries `LineOffsets`/`EndOffset` (each line's absolute
+  byte start, and one past the last line) — not needed by text rendering
+  itself, but by placing `StyledSpan`s against specific runes (see below).
   Exposed to frontends via `Editor.Viewport(...)`, not called directly —
   same decoupling reasoning as everywhere else in this package map.
+  `style.go` is the styled-rendering contract (settled 2026-09-19): a
+  `StyledSpan{offset.TextRange, Style}` (reusing the same range vocabulary
+  as motions/delete ranges, not a new one), `StyleAt`/`SpansForRange` as
+  the pure lookup/filter functions, and `types.Style` (a small semantic
+  category enum — keyword, string, diagnostic-error, etc. — colors are
+  each frontend's own concern, matching how `Mode` already works).
+  Exposed via `Editor.StyleSpans(start, end)`, which is real and tested
+  but always returns empty today — nothing produces a real `StyledSpan`
+  yet (no syntax analyzer exists). **Wired into both frontends' actual
+  rendering as of 2026-09-19**: `gui-base`'s `renderLine` and `tui-base`'s
+  per-line loop both fetch spans and color runes per `StyleAt`, falling
+  back to the cheap plain-text path when a line has none (identical
+  output to before `StyledSpan` existed, verified by tests) — so the
+  moment a real producer populates `Editor.styleSpans`, highlighting
+  renders with no further frontend changes needed.
 - **`internal/gui-base`**, **`internal/tui-base`** — thin, single-file
   (`base.go`) front ends, one per toolkit. Both hold an `*editor.Editor` and
   render a Tokyo Night–themed view + status bar, and both route every
@@ -414,7 +445,11 @@ can end up in a dependency cycle with `editor` or with each other.
   renders via `Editor.Viewport` (windowed, scroll-follows-cursor) with a
   block/pipe cursor per mode; `tui-base` still does full-buffer
   `GetText()` + `strings.Split` every frame (see Known issues item 3). Both
-  also render a wildmenu-style completion popup for `:e`/`:w` path
+  now also color runes per `Editor.StyleSpans` (currently always empty —
+  see `internal/viewmanager`'s `style.go` entry above), each frontend
+  owning its own `Style` → color mapping (`gui-base`'s `styleColor`,
+  `tui-base`'s `tviewStyleTag`). Both also render a wildmenu-style
+  completion popup for `:e`/`:w` path
   completion above the status bar: `<Tab>` (`Editor.TriggerCompletion`)
   starts a cycle or confirms the current selection — descending into it
   (a fresh candidate list one directory deeper) if it's a directory,

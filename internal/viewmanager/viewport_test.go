@@ -57,3 +57,22 @@ func TestViewportSliceContent(t *testing.T) {
 		}
 	}
 }
+
+func TestViewportSliceLineOffsets(t *testing.T) {
+	// "aaa\nbbb\nccc\nddd\neee" -> aaa@0, bbb@4, ccc@8, ddd@12, eee@16
+	table := piecetable.NewPieceTable([]byte("aaa\nbbb\nccc\nddd\neee"))
+
+	s := ViewportSlice(table, 1, 2, 0) // rows 1-2: "bbb", "ccc"
+	wantOffsets := []int{4, 8}
+	if len(s.LineOffsets) != len(wantOffsets) {
+		t.Fatalf("LineOffsets = %v, want %v", s.LineOffsets, wantOffsets)
+	}
+	for i := range wantOffsets {
+		if s.LineOffsets[i] != wantOffsets[i] {
+			t.Errorf("LineOffsets[%d] = %d, want %d", i, s.LineOffsets[i], wantOffsets[i])
+		}
+	}
+	if s.EndOffset != 12 {
+		t.Errorf("EndOffset = %d, want 12 (start of the next row, ddd)", s.EndOffset)
+	}
+}

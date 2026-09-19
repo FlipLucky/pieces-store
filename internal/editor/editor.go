@@ -29,6 +29,11 @@ type Editor struct {
 	isQuitRequested    bool
 	lastCommandError   error
 	change             chan ChangeEvent
+	// styleSpans backs StyleSpans — always nil today, since nothing
+	// produces real spans yet. White-box tests set it directly to prove
+	// the query logic; a future syntax/LSP layer would populate it for
+	// real the same way.
+	styleSpans []viewmanager.StyledSpan
 }
 
 // ChangeEvent describes one change to the editor's state, delivered on
@@ -124,6 +129,19 @@ func (e *Editor) GetFilePath() string {
 	return e.table.FilePath
 }
 
+// Language returns the buffer's detected language, based on its file
+// path's extension (types.DetectLanguage) — LanguagePlainText for an
+// unsaved buffer or an unrecognized extension. Computed fresh each call
+// rather than cached, so it's always consistent with the current
+// FilePath with no staleness to manage across OpenFile/:e/SaveAs.
+// Nothing consumes this yet — it exists for a future syntax analyzer (or
+// LSP client) to know which grammar/languageId to use.
+func (e *Editor) Language() types.Language {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return types.DetectLanguage(e.table.FilePath)
+}
+
 func (e *Editor) SaveFile() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -163,6 +181,19 @@ func (e *Editor) Viewport(topRow, visibleRows, margin int) viewmanager.Slice {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return viewmanager.ViewportSlice(e.table, topRow, visibleRows, margin)
+}
+
+// StyleSpans returns the styled spans — e.g. syntax highlighting, and
+// eventually diagnostics — overlapping [start, end), for a frontend to
+// render alongside the text from Viewport (typically called with a
+// Slice's StartOffset/EndOffset). Always empty today: nothing produces
+// real spans yet, since no syntax analyzer exists — this is the query
+// contract a future one will populate (via e.styleSpans), not the
+// analysis itself.
+func (e *Editor) StyleSpans(start, end int) []viewmanager.StyledSpan {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return viewmanager.SpansForRange(e.styleSpans, start, end)
 }
 
 func (e *Editor) ChangeChan() <-chan ChangeEvent {
