@@ -134,10 +134,22 @@ func Boot(ed *editor.Editor) error {
 		AddItem(statusBar, 1, 0, false)
 
 	const maxCompletionRows = 8
+	// viewportRadius is how many rows above/below the cursor get fetched —
+	// generous compared to any real terminal height, tiny compared to a
+	// large file, so rendering scales with editing activity near the
+	// cursor rather than total file size (replaces the old naive
+	// GetText()+strings.Split of the whole document on every keystroke).
+	const viewportRadius = 200
+	// cursorTopPadding is how many rows from the top of the terminal's
+	// visible window the cursor is kept — simpler than gui-base's
+	// minimal-scroll followCursor (which needs exact on-screen-row
+	// knowledge this widget's internal scrolling doesn't expose cheaply),
+	// but a real improvement over no auto-follow at all, which is what
+	// existed here before.
+	const cursorTopPadding = 10
 
 	// Function to rebuild rendering text with cursor block highlight
 	renderContent := func() {
-		text := ed.GetText()
 		cursor := ed.GetCursor()
 		filePath := ed.GetFilePath()
 		if filePath == "" {
@@ -146,20 +158,14 @@ func Boot(ed *editor.Editor) error {
 
 		editorView.SetTitle(fmt.Sprintf(" Pieces Store TUI Editor — %s ", filePath))
 
-		lines := strings.Split(text, "\n")
-
-		lineOffsets := make([]int, len(lines))
-		acc := 0
-		for i, l := range lines {
-			lineOffsets[i] = acc
-			acc += len(l) + 1
-		}
-		spans := ed.StyleSpans(0, len(text))
+		slice := ed.Viewport(cursor.Row, 1, viewportRadius)
+		spans := ed.StyleSpans(slice.StartOffset, slice.EndOffset)
 
 		var formattedLines []string
-		for i, line := range lines {
-			lineStart := lineOffsets[i]
-			isCursorLine := i == cursor.Row
+		for i, line := range slice.Lines {
+			absRow := slice.StartRow + i
+			lineStart := slice.LineOffsets[i]
+			isCursorLine := absRow == cursor.Row
 			lineSpans := viewmanager.SpansForRange(spans, lineStart, lineStart+len(line))
 			if !isCursorLine && len(lineSpans) == 0 {
 				formattedLines = append(formattedLines, line)
@@ -169,6 +175,13 @@ func Boot(ed *editor.Editor) error {
 		}
 
 		editorView.SetText(strings.Join(formattedLines, "\n"))
+
+		cursorRow := cursor.Row - slice.StartRow
+		scrollRow := cursorRow - cursorTopPadding
+		if scrollRow < 0 {
+			scrollRow = 0
+		}
+		editorView.ScrollTo(scrollRow, 0)
 
 		if completion := cursor.Completion; completion.Active && len(completion.Candidates) > 0 {
 			windowed, selected := completionWindow(completion.Candidates, completion.Index, maxCompletionRows)

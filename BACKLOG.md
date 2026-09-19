@@ -70,6 +70,3 @@ list, not a gap.
   ignores `Count`, applying once regardless (e.g. `3diw` behaves like
   `diw`). Not in the agreed 14-case list; `executeMove` already loops on
   `Count` if a similar loop is wanted here later.
-- `internal/gui-base`/`internal/tui-base` still do naive full-buffer
-  `GetText()` + `strings.Split` on every render — the actual fix is the
-  planned viewport-as-offset-slice work, not a local patch here.

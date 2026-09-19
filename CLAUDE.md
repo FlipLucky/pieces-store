@@ -443,8 +443,11 @@ can end up in a dependency cycle with `editor` or with each other.
   `tui-base` gets natively from tcell; multi-rune `key.EditEvent` text —
   paste/IME — goes through `ed.InsertLiteralText` instead). `gui-base`
   renders via `Editor.Viewport` (windowed, scroll-follows-cursor) with a
-  block/pipe cursor per mode; `tui-base` still does full-buffer
-  `GetText()` + `strings.Split` every frame (see Known issues item 3). Both
+  block/pipe cursor per mode; `tui-base` now also fetches via
+  `Editor.Viewport` (a window around the cursor, `tview.TextView.ScrollTo`
+  keeping it a fixed distance from the top — settled 2026-09-19, see
+  Known issues item 2) instead of full-buffer `GetText()` +
+  `strings.Split` every frame. Both
   now also color runes per `Editor.StyleSpans` (currently always empty —
   see `internal/viewmanager`'s `style.go` entry above), each frontend
   owning its own `Style` → color mapping (`gui-base`'s `styleColor`,
@@ -535,12 +538,16 @@ Known gaps as of now:
 2. **`internal/viewmanager/virtual_grid.go`'s `GetScreenPosition` is a
    no-op** passthrough — scroll offsets, line wrapping, tab expansion, and
    a line-number gutter aren't implemented yet (distinct from
-   `ViewportSlice`, which does the line-windowing `gui-base` now uses).
-   `tui-base` still does naive full-buffer `GetText()` + `strings.Split`
-   on every keystroke *and* every cursor move — `gui-base` no longer does,
-   see Current phase — which is a real performance concern on large files
-   (see Design philosophy's "performance first") once `tui-base` gets the
-   same `Editor.Viewport` treatment.
+   `ViewportSlice`, which both front ends now use for windowed reads —
+   `tui-base` got the same `Editor.Viewport` treatment as `gui-base` as of
+   2026-09-19, fetching a window around the cursor — see Current phase —
+   instead of full-buffer `GetText()` + `strings.Split` on every
+   keystroke). `tui-base`'s cursor-follow scrolling is deliberately
+   simpler than `gui-base`'s minimal-scroll `followCursor` (a fixed
+   top-padding via `tview.TextView.ScrollTo`, not exact on-screen-row
+   tracking — that widget doesn't expose visible-row count cheaply before
+   its first real draw) — still a real improvement over no auto-follow at
+   all, which is what existed before.
 3. **Cross-cutting backend concerns, still open**: `piecetable.GetRuneAt`/
    `FindPieceAt` bypass their own mutex on the actual read path (a real, if
    currently latent, data race); `Insert` with a negative offset silently
