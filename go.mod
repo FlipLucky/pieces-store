@@ -4,13 +4,14 @@ go 1.26.2
 
 require (
 	gioui.org v0.10.0
+	github.com/gdamore/tcell/v2 v2.8.1
+	github.com/odvcencio/gotreesitter v0.53.0
 	github.com/rivo/tview v0.42.0
 )
 
 require (
 	gioui.org/shader v1.0.8 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
-	github.com/gdamore/tcell/v2 v2.8.1 // indirect
 	github.com/go-text/typesetting v0.3.4 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect

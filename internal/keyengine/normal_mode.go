@@ -31,19 +31,31 @@ func CreateNormalModeNouns() map[string]KeyAction {
 
 // CreateNormalModeDirects covers every key that executes immediately with
 // no modifier/noun needed: silent motions (w/b/e reuse the same noun
-// identities diw/daw would resolve), editor-level commands (u, <C-r>, r),
-// and mode switches (:, i, o, O).
+// identities diw/daw would resolve; h/j/k/l and the arrow keys are plain
+// cursor motions with no operator-pending counterpart at all), editor-level
+// commands (u, <C-r>, r), and mode switches (:, i, o, O). Arrow keys map to
+// the exact same DirectAction as their hjkl equivalent — same command,
+// just a different physical key — so Normal mode treats them identically.
 func CreateNormalModeDirects() map[string]DirectAction {
 	return map[string]DirectAction{
-		"w":     {Verb: Move, Noun: Word},
-		"b":     {Verb: Move, Noun: WordBackward},
-		"e":     {Verb: Move, Noun: WordEnd},
-		"u":     {Verb: Undo},
-		"<C-r>": {Verb: Redo},
-		"r":     {Verb: Replace},
-		":":     {Verb: EnterCommand},
-		"i":     {Verb: EnterInsert},
-		"o":     {Verb: OpenBelow},
-		"O":     {Verb: OpenAbove},
+		"w":       {Verb: Move, Noun: Word},
+		"b":       {Verb: Move, Noun: WordBackward},
+		"e":       {Verb: Move, Noun: WordEnd},
+		"h":       {Verb: Move, Noun: CharBackward},
+		"<Left>":  {Verb: Move, Noun: CharBackward},
+		"l":       {Verb: Move, Noun: CharForward},
+		"<Right>": {Verb: Move, Noun: CharForward},
+		"k":       {Verb: Move, Noun: LineUp},
+		"<Up>":    {Verb: Move, Noun: LineUp},
+		"j":       {Verb: Move, Noun: LineDown},
+		"<Down>":  {Verb: Move, Noun: LineDown},
+		"u":       {Verb: Undo},
+		"<C-r>":   {Verb: Redo},
+		"r":       {Verb: Replace},
+		":":       {Verb: EnterCommand},
+		"i":       {Verb: EnterInsert},
+		"o":       {Verb: OpenBelow},
+		"O":       {Verb: OpenAbove},
+		"K":       {Verb: Hover},
 	}
 }

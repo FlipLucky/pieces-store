@@ -5,7 +5,7 @@ tmp_dir = "tmp/tui-build"
 [build]
   args_bin = []
   bin = "./tmp/tui-app"
-  cmd = "go build -o ./tmp/tui-app ./cmd/tui/main.go"
+  cmd = "go build -tags \"grammar_subset,grammar_subset_go,grammar_subset_typescript,grammar_subset_tsx,grammar_subset_javascript,grammar_subset_html,grammar_subset_css,grammar_subset_scss,grammar_subset_php,grammar_subset_dart,grammar_subset_c,grammar_subset_cpp,grammar_subset_yaml,grammar_subset_json,grammar_subset_dockerfile,grammar_subset_markdown\" -o ./tmp/tui-app ./cmd/tui/main.go"
   delay = 1000
   exclude_dir = ["assets", "tmp", "vendor", "testdata"]
   exclude_file = []

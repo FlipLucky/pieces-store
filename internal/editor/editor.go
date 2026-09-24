@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/fliplucky/pieces-store/internal/keyengine"
+	"github.com/fliplucky/pieces-store/internal/lspclient"
 	"github.com/fliplucky/pieces-store/internal/offset"
 	"github.com/fliplucky/pieces-store/internal/piecetable"
+	"github.com/fliplucky/pieces-store/internal/syntax"
 	"github.com/fliplucky/pieces-store/internal/types"
 	"github.com/fliplucky/pieces-store/internal/viewmanager"
 )
@@ -29,11 +31,38 @@ type Editor struct {
 	isQuitRequested    bool
 	lastCommandError   error
 	change             chan ChangeEvent
-	// styleSpans backs StyleSpans — always nil today, since nothing
-	// produces real spans yet. White-box tests set it directly to prove
-	// the query logic; a future syntax/LSP layer would populate it for
-	// real the same way.
-	styleSpans []viewmanager.StyledSpan
+	// highlighter backs StyleSpans — nil whenever the buffer's detected
+	// Language has no tree-sitter grammar wired up (including
+	// LanguagePlainText, or an unsaved buffer). Kept in sync with the
+	// table's content via moveCursorToLocked (incremental) and
+	// setupHighlighterLocked (full reparse, whenever the table itself is
+	// replaced wholesale — NewEditorFromFile/OpenFile/:e).
+	highlighter *syntax.Highlighter
+	// asyncResults and statusMessage back the async bridge (async.go) —
+	// asyncResults is drained by a dedicated goroutine started once by
+	// startAsyncLoop; statusMessage is non-error progress text (e.g.
+	// "installing gopls...") shown alongside, not instead of,
+	// lastCommandError, which is explicitly error-shaped.
+	asyncResults  chan asyncApply
+	statusMessage string
+	// lspServer/lspLanguage/lspVersion/lspURI/diagnostics back the LSP
+	// client wiring (lsp.go) — lspServer is nil whenever no server is
+	// installed/running for the current buffer's language (including
+	// LanguagePlainText or an unsaved buffer, which have no file URI to
+	// give a server anyway). See lsp.go's package doc comment for the
+	// full lifecycle.
+	lspServer       *lspclient.Server
+	lspLanguage     types.Language
+	lspVersion      int
+	lspURI          string
+	lspCapabilities lspclient.Capabilities
+	// lspCompletionGeneration guards against a slow completion response
+	// landing after a newer keystroke already fired another request (or
+	// dismissed the popup entirely) — each request captures the
+	// generation it was fired under and its result is discarded if that's
+	// no longer current by the time it arrives.
+	lspCompletionGeneration int
+	diagnostics             []viewmanager.DiagnosticSpan
 }
 
 // ChangeEvent describes one change to the editor's state, delivered on
@@ -62,6 +91,7 @@ func NewEditor(initialText string) *Editor {
 		commandContext: keyengine.CreateCommandContext(),
 		change:         make(chan ChangeEvent, 1),
 	}
+	ed.startAsyncLoop()
 
 	// Ticker simulation - only starts if SIMULATE=true is set in the environment
 	if os.Getenv("SIMULATE") == "true" {
@@ -108,13 +138,34 @@ func NewEditorFromFile(filePath string) (*Editor, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Editor{
+	e := &Editor{
 		table:          table,
 		virtualGrid:    viewmanager.NewVirtualGrid(),
 		cursor:         NewCursor(),
 		commandContext: keyengine.CreateCommandContext(),
 		change:         make(chan ChangeEvent, 1),
-	}, nil
+	}
+	e.startAsyncLoop()
+	e.setupHighlighterLocked()
+	e.ensureLSPForCurrentBufferLocked()
+	return e, nil
+}
+
+// setupHighlighterLocked (re)creates the highlighter for the table's
+// current FilePath and does an initial full parse — called whenever the
+// table is replaced wholesale (construction, OpenFile, :e), since a new
+// file may be a different Language (or none) than whatever highlighter
+// already existed. Caller must already hold e.mu, or be a constructor
+// where no other goroutine can see e yet.
+func (e *Editor) setupHighlighterLocked() {
+	lang := types.DetectLanguage(e.table.FilePath)
+	hl, ok := syntax.New(lang)
+	if !ok {
+		e.highlighter = nil
+		return
+	}
+	e.highlighter = hl
+	e.highlighter.Reparse([]byte(e.table.CombinePieces()))
 }
 
 func (e *Editor) GetText() string {
@@ -163,6 +214,8 @@ func (e *Editor) OpenFile(filePath string) error {
 	}
 	e.table = newTable
 	e.cursor.Update(0, 0, 0)
+	e.setupHighlighterLocked()
+	e.ensureLSPForCurrentBufferLocked()
 	e.notifyChange(piecetable.Edit{}) // whole-document replacement, not an incremental delta
 	return nil
 }
@@ -171,6 +224,31 @@ func (e *Editor) GetCursor() Cursor {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return *e.cursor
+}
+
+// IndentStringAt returns the leading whitespace — one tab per nesting
+// level — a new line starting at byte offset at should have, per the
+// syntax highlighter's IndentAt. "" wherever there's no highlighter
+// (including LanguagePlainText) or at sits at the top level. Real,
+// tree-based auto-indent: <Enter> in Insert mode and o/O in Normal mode
+// both use this, not a naive "copy the previous line's whitespace" or
+// brace-counting heuristic (see internal/syntax.Highlighter.IndentAt's
+// doc comment for why brace-counting specifically is the wrong call).
+func (e *Editor) IndentStringAt(at int) string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.indentStringAtLocked(at)
+}
+
+func (e *Editor) indentStringAtLocked(at int) string {
+	if e.highlighter == nil {
+		return ""
+	}
+	depth := e.highlighter.IndentAt(at)
+	if depth <= 0 {
+		return ""
+	}
+	return strings.Repeat("\t", depth)
 }
 
 // Viewport returns just the lines worth rendering for a window into the
@@ -183,17 +261,34 @@ func (e *Editor) Viewport(topRow, visibleRows, margin int) viewmanager.Slice {
 	return viewmanager.ViewportSlice(e.table, topRow, visibleRows, margin)
 }
 
-// StyleSpans returns the styled spans — e.g. syntax highlighting, and
-// eventually diagnostics — overlapping [start, end), for a frontend to
-// render alongside the text from Viewport (typically called with a
-// Slice's StartOffset/EndOffset). Always empty today: nothing produces
-// real spans yet, since no syntax analyzer exists — this is the query
-// contract a future one will populate (via e.styleSpans), not the
-// analysis itself.
+// StyleSpans returns the syntax-highlighting spans overlapping [start,
+// end), for a frontend to render alongside the text from Viewport
+// (typically called with a Slice's StartOffset/EndOffset). Empty whenever
+// the buffer's Language has no tree-sitter grammar wired up (including
+// LanguagePlainText). Deliberately doesn't include diagnostics — see
+// DiagnosticSpans — so a frontend can render both independently (a
+// token's own color, plus a diagnostic as underline) rather than one
+// overriding the other, which is what merging them into one Style-per-byte
+// value would force (viewmanager.StyleAt only ever resolves one Style per
+// overlapping byte).
 func (e *Editor) StyleSpans(start, end int) []viewmanager.StyledSpan {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return viewmanager.SpansForRange(e.styleSpans, start, end)
+	if e.highlighter == nil {
+		return nil
+	}
+	return e.highlighter.Spans(start, end)
+}
+
+// DiagnosticSpans returns real LSP diagnostics (see lsp.go) overlapping
+// [start, end) — severity (for underline color) and message (for virtual
+// text) both included. Kept separate from StyleSpans specifically so a
+// frontend renders diagnostic severity as an underline over a token's own
+// syntax color, not a replacement for it.
+func (e *Editor) DiagnosticSpans(start, end int) []viewmanager.DiagnosticSpan {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return viewmanager.DiagnosticSpansForRange(e.diagnostics, start, end)
 }
 
 func (e *Editor) ChangeChan() <-chan ChangeEvent {
@@ -243,7 +338,15 @@ func (e *Editor) MoveCursorRight() {
 func (e *Editor) MoveCursorUp() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.moveCursorUpLocked()
+}
 
+// moveCursorUpLocked is MoveCursorUp's body, split out so executeMove (in
+// dispatch.go, for keyengine's LineUp) can call it while already holding
+// e.mu — MoveCursorUp itself can't be called there, since it would try to
+// lock a mutex Go's sync.Mutex doesn't allow re-entering. Caller must
+// already hold e.mu.
+func (e *Editor) moveCursorUpLocked() {
 	if e.cursor.Row <= 0 {
 		return
 	}
@@ -262,7 +365,12 @@ func (e *Editor) MoveCursorUp() {
 func (e *Editor) MoveCursorDown() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.moveCursorDownLocked()
+}
 
+// moveCursorDownLocked is MoveCursorDown's body — see moveCursorUpLocked's
+// comment for why this split exists. Caller must already hold e.mu.
+func (e *Editor) moveCursorDownLocked() {
 	// Down always targets the row right after the current one, so the
 	// current position is a valid forward-scan anchor — this resumes from
 	// here instead of rescanning the whole buffer from offset 0.
@@ -272,7 +380,7 @@ func (e *Editor) MoveCursorDown() {
 	// If the target row doesn't actually exist (already on the last line),
 	// PositionToByteOffset falls through to doc.Len() — snapping to the
 	// end of the buffer instead of staying put. Detect that and no-op,
-	// matching MoveCursorUp's symmetric guard.
+	// matching moveCursorUpLocked's symmetric guard.
 	if actual := offset.ByteOffsetToPosition(e.table, newOffset); actual.Row <= e.cursor.Row {
 		return
 	}
@@ -342,6 +450,10 @@ func (e *Editor) SetMode(m types.Mode) {
 		e.cursor.Completion = CompletionState{}
 		e.completionLineHead = ""
 	}
+	if m != types.ModeInsert {
+		e.cursor.LSPCompletion = LSPCompletionState{}
+	}
+	e.dismissHoverLocked()
 	e.notifyChange(piecetable.Edit{})
 }
 
@@ -480,6 +592,26 @@ func (e *Editor) GetLastCommandError() error {
 	return e.lastCommandError
 }
 
+// StatusMessage returns the current non-error status text (e.g. "installing
+// gopls...", "gopls installed (v0.23.0)") — a separate slot from
+// GetLastCommandError specifically because that one is error-shaped
+// (skips ErrQuit, which isn't really an error); progress/status text like
+// this needs its own place rather than overloading that one. Set via
+// setStatusMessageLocked, most often from an asyncApply closure (async.go)
+// reporting how a background task like :LspInstall turned out.
+func (e *Editor) StatusMessage() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.statusMessage
+}
+
+// setStatusMessageLocked sets the status text and notifies frontends to
+// redraw. Caller must already hold e.mu.
+func (e *Editor) setStatusMessageLocked(msg string) {
+	e.statusMessage = msg
+	e.notifyChange(piecetable.Edit{})
+}
+
 func (e *Editor) executeCommandLocked(rawCmd string) error {
 	trimmed := strings.TrimSpace(rawCmd)
 	if strings.HasPrefix(trimmed, ":") {
@@ -510,6 +642,8 @@ func (e *Editor) executeCommandLocked(rawCmd string) error {
 			} else {
 				e.table = newTable
 				e.cursor.Update(0, 0, 0)
+				e.setupHighlighterLocked()
+				e.ensureLSPForCurrentBufferLocked()
 			}
 		} else {
 			err = errors.New("no file specified for :e")
@@ -531,6 +665,14 @@ func (e *Editor) executeCommandLocked(rawCmd string) error {
 			err = ErrQuit
 			e.isQuitRequested = true
 		}
+	case "LspInstall":
+		err = e.startLspInstallLocked(parts[1:])
+	case "LspUninstall":
+		err = e.lspUninstallLocked(parts[1:])
+	case "LspStatus":
+		err = e.reportLspStatusLocked()
+	case "Format", "format":
+		err = e.startFormatLocked()
 	default:
 		err = ErrUnknownCommand
 	}

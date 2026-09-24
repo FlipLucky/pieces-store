@@ -1,6 +1,9 @@
 package editor
 
-import "github.com/fliplucky/pieces-store/internal/types"
+import (
+	"github.com/fliplucky/pieces-store/internal/lspclient"
+	"github.com/fliplucky/pieces-store/internal/types"
+)
 
 // CompletionState is an in-progress :e/:w path-completion cycle — which
 // candidates matched the token being completed, and which one is
@@ -13,10 +16,34 @@ type CompletionState struct {
 	Index      int
 }
 
+// HoverState is an in-progress LSP hover popup (K in Normal mode). Zero
+// value means "nothing to show" — the same convention CompletionState
+// uses. Text is already normalized to plain displayable text
+// (lspclient.HoverResult.Text) — frontends don't need to know about
+// hover's underlying markup shape.
+type HoverState struct {
+	Active bool
+	Text   string
+}
+
+// LSPCompletionState is an in-progress LSP autocomplete popup — a separate
+// type from CompletionState (not a reuse) because a real LSP completion
+// item needs more than a display string: label, detail, and either plain
+// insert text or a structured TextEdit (a replace-this-range instruction,
+// which real servers use far more often than plain InsertText — confirmed
+// against gopls, see lspclient's own doc comments). Reusing
+// lspclient.CompletionItem directly rather than redefining an equivalent
+// type here.
+type LSPCompletionState struct {
+	Active bool
+	Items  []lspclient.CompletionItem
+	Index  int
+}
+
 // Cursor is editor state — position, mode, the in-progress command
-// buffer, and any in-progress command-line completion — not view state.
-// Frontends read it for rendering, but it lives here because Editor owns
-// it end-to-end.
+// buffer, and any in-progress command-line/LSP completion or hover popup —
+// not view state. Frontends read it for rendering, but it lives here
+// because Editor owns it end-to-end.
 type Cursor struct {
 	ByteOffset    int
 	Row           int
@@ -24,6 +51,8 @@ type Cursor struct {
 	Mode          types.Mode
 	CommandBuffer string
 	Completion    CompletionState
+	LSPCompletion LSPCompletionState
+	Hover         HoverState
 }
 
 func NewCursor() *Cursor {

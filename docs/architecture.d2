@@ -1,0 +1,47 @@
+direction: down
+
+frontends: "Frontends" {
+  cmd_gui: "cmd/gui"
+  cmd_tui: "cmd/tui"
+  gui_base: "gui-base\n(Gio)"
+  tui_base: "tui-base\n(tview/tcell)"
+
+  cmd_gui -> gui_base
+  cmd_tui -> tui_base
+}
+
+editor: "internal/editor\n(the orchestrator)" {
+  style.fill: "#dbe9ff"
+}
+
+core: "Core — unchanged shape this session" {
+  style.stroke: "#4a90d9"
+
+  piecetable: "piecetable\nthe text buffer"
+  offset: "offset\nposition / motion math"
+  keyengine: "keyengine\nvim keystroke parser"
+  viewmanager: "viewmanager\nviewport + style contract"
+}
+
+lsp: "LSP stack — new this session" {
+  style.stroke: "#d9784a"
+
+  syntax: "syntax\ntree-sitter highlighting\n(reworked for perf this session)"
+  lspclient: "lspclient\nJSON-RPC protocol client"
+  lspmanager: "lspmanager\ninstaller (:LspInstall)"
+  platform: "platform\nOS paths / arch"
+
+  lspmanager -> platform: "resolves install dir"
+}
+
+frontends.gui_base -> editor: "HandleKey"
+frontends.tui_base -> editor: "HandleKey"
+
+editor -> core.piecetable
+editor -> core.offset
+editor -> core.keyengine
+editor -> core.viewmanager
+
+editor -> lsp.syntax: "highlight + indent"
+editor -> lsp.lspclient: "hover / complete / format"
+editor -> lsp.lspmanager: ":LspInstall"

@@ -203,9 +203,15 @@ than jumping straight to full IDE breadth.
   least learn *what* changed — but it's still explicitly a coalescing,
   best-effort "please redraw" channel (a burst of edits collapses to the
   latest one, by design — see its doc comment), not a lossless ordered
-  stream. Anything that must see every edit exactly once, in order (e.g.
-  incremental treesitter re-parsing), needs a separate, non-coalescing
-  mechanism that doesn't exist yet. Partially de-risked by the
+  stream. `internal/syntax`'s incremental re-parsing (added 2026-09-19)
+  sidesteps this rather than needing the non-coalescing mechanism this
+  item originally called for: `Editor.moveCursorToLocked` calls
+  `Highlighter.Update` directly and synchronously, inline with the edit
+  itself, never through `ChangeChan` at all — so it never has anything to
+  lose to coalescing in the first place. That escape hatch is specific to
+  same-process consumers living inside `Editor`'s own locked methods; an
+  out-of-process consumer (a real LSP client, eventually) can't use it and
+  would still need a real solution here. Partially de-risked by the
   multi-buffer shape aligning with LSP's per-document model, but the
   scheduling question itself is unaddressed — correctly so, until LSP's
   actual behavior is well
@@ -305,12 +311,237 @@ mode, matching vim's own convention, and a status-bar line for
 Roadmap is now reached: both front ends are real, functional editors on
 top of the same engine, not just `tui-base` alone.
 
-**Next up**: none of the MVP staging items are individually assigned yet
-— see the Roadmap's numbered stages (1. MVP polish/find-replace, 2.
-markdown/HTML+treesitter/LSP, ...) for what's next in line, plus
-`BACKLOG.md`/Known issues for anything that surfaces opportunistically.
-Visual mode (Known issues item 2) and `tui-base`'s still-naive full-buffer
-render (Known issues item 3) are the most likely near-term picks.
+**LSP integration, Part 1 shipped (2026-09-20)** — a real language-server
+installer/manager (`internal/lspmanager`, `platform/`, `internal/editor`'s
+new async bridge — see Architecture below for the full detail), the first
+of a two-part plan (Part 2 — the LSP client itself plus format/diagnostics/
+autocomplete/hover — is next; go-to-definition and everything it drags in
+(multi-buffer/workspace, workspace-wide search) is a deliberately separate,
+not-yet-started third plan). `:LspInstall <language>` genuinely installs a
+real language server from mason-registry's live data — verified end-to-end
+against real toolchains and the real registry, not mocked. Known, honestly-
+scoped trims from the full plan, not yet done: HTML/CSS/JSON's shared npm
+source (`vscode-langservers-extracted`) installs three separate times
+instead of being deduplicated across catalog entries (correct, just
+wasteful); `:LspUninstall` only removes the index record, not the
+install directory itself (deliberately deferred — real filesystem deletion
+of a version-pinned tree deserves its own attention); npm-installed
+servers' Windows binary path (a `.cmd`/`.ps1` shim, not directly
+`exec`-able) is a known, documented gap, not silently mishandled.
+
+**LSP Part 2 core + diagnostics shipped, same day**: new package
+`internal/lspclient` — a hand-rolled (not a library; the real message
+surface, confirmed via a throwaway probe against real `gopls` first,
+turned out small enough not to need one) JSON-RPC/LSP client:
+`transport.go` (Content-Length framing), `client.go` (request/response
+correlation, notification dispatch, auto-replies "method not found" to any
+unsupported server-to-client request rather than hanging the server),
+`lifecycle.go` (spawn, real `initialize`/`initialized` handshake, bounded
+`Stop()`), `position.go` (byte-offset ↔ LSP `Position`, real UTF-16
+code-unit math — confirmed empirically that `gopls` defaults to UTF-16
+even when UTF-8 is offered), `sync.go`
+(`didOpen`/`didChange`/`didClose`/`hover`/`completion`/`formatting`
+wrappers, diagnostics parsing). `didChange` is full-sync (whole document
+each time) — a deliberate v1 call since incremental sync needs pre-edit
+content `Editor` doesn't snapshot — accepted explicitly by the user
+("if you have a 500MB file with a complex LSP running, you're doing
+something wrong").
+
+Wired into `Editor` via new `internal/editor/lsp.go`: one lazily-started
+server per buffer language (mirrors `setupHighlighterLocked`'s own
+lazy-per-buffer pattern), spawned/initialized asynchronously via the
+Part-1 `runAsync` bridge, `didChange` sent synchronously inline from
+`moveCursorToLocked` right next to the tree-sitter highlighter's own
+`Update` call (same "local pipe write, not a network call" reasoning).
+Real diagnostics now flow into `Editor.StyleSpans` — placed first so they
+override syntax color at the same byte — tagged against the currently-open
+document's URI so a notification for a since-closed buffer is discarded.
+**Needed zero new frontend rendering code**: both `gui-base` and
+`tui-base` already had real color mappings for `StyleDiagnosticError`/
+`StyleDiagnosticWarning` from the original styled-rendering-contract work
+(2026-09-19) — only the producer was missing.
+
+A real, if minor, test-isolation bug was caught the same session: wiring
+LSP startup into every file-open path meant existing tests started
+touching `platform.LSPServersDir()` — real `os.UserCacheDir()` — confirmed
+to actually create `~/.cache/pieces-store/` on the real machine during a
+plain `go test ./...`. Fixed with a package-wide `TestMain` in
+`internal/editor` isolating the cache/config env vars for the whole test
+binary.
+
+Verified end-to-end against a real, spawned `gopls`: a real `.go` file
+with an actual compile error, opened through a live `Editor`, produces a
+real `StyleDiagnosticError` span in `StyleSpans` — install through
+rendering-ready state, all real, not mocked.
+
+**LSP Part 2 completed the same day** — formatting, hover, autocomplete,
+and the cursor-anchored floating-popup UI all landed:
+
+- **Formatting** (`:Format`): requests `textDocument/formatting`, applies
+  the returned edits via new `Editor.applyTextEditsLocked` (multi-edit
+  batch apply, sorted end-to-start so an earlier edit's offset is never
+  invalidated by a later one already applied — a real, previously-
+  nonexistent piece of `Editor` surface, since it only ever exposed
+  single Insert/Delete before this).
+- **Hover** (`K` in Normal mode, a new `keyengine.Hover` verb): async
+  `textDocument/hover` request, result shown via new `Cursor.HoverState`,
+  auto-dismissed on the next cursor move or mode change
+  (`dismissHoverLocked`, called from `moveCursorToLocked`/`SetMode`).
+- **Autocomplete**: triggers automatically on the server's own advertised
+  trigger characters (e.g. `.` for `gopls`) while in Insert mode; browsed
+  with `<C-n>`/`<C-p>` (already-existing key translations in both
+  frontends needed zero changes — they were built for `:e`/`:w` path
+  completion but are mode-agnostic), confirmed with `<Enter>`. A new
+  `Cursor.LSPCompletionState` reuses `lspclient.CompletionItem` directly
+  rather than the thinner `[]string`-based `CompletionState` path
+  completion already uses — confirmed against real `gopls` output that
+  real servers return `TextEdit`-based completions (a replace-this-range
+  instruction), not plain insert text, and the apply logic handles both.
+  A generation counter (`lspCompletionGeneration`) discards a slow
+  response if the user kept typing past it.
+- **Floating popups, new UI in both frontends** (the user's explicit
+  choice over reusing the docked completion bar): `tui-base` uses
+  `tview.Pages` with **exact terminal-cell positioning** (no
+  approximation needed — `editorView.GetInnerRect()` plus the
+  already-tracked cursor row/col give real integer coordinates).
+  `gui-base` needed a new `layout.Stack` wrapping the whole top-level
+  layout (previously a plain `layout.Flex`) so `op.Offset` could position
+  an overlay — **honestly approximate, not pixel-exact**: Gio's own
+  per-rune layout here never computes real pixel coordinates for the
+  cursor (only byte offsets), so position is derived from
+  `cursor.Row`/`Col` and font-size-derived cell dimensions
+  (`charWidthPx`/`lineHeightPx` — the same approximation `followCursor`'s
+  scroll math already used), not real op-recording. Flagged as a real,
+  documented limitation worth revisiting if it's visually off enough to
+  matter in daily use, not silently claimed as exact.
+
+**Caught a real reentrant-mutex bug before it ever ran**, matching this
+codebase's established `moveCursorUpLocked`/`moveCursorDownLocked`
+precedent: the first `:Format` implementation called a public, locking
+`StartFormat()` from inside `executeCommandLocked`, which itself runs
+under `ExecuteCommand`'s already-held lock — a guaranteed deadlock on
+first use. Caught by re-checking the actual call chain before running
+anything, not by hitting the hang; split into a public `StartFormat()`
+(locks, for any future caller that isn't already inside a locked method)
+and `startFormatLocked()` (assumes the lock is already held, what
+`executeCommandLocked` actually calls).
+
+**Verified end-to-end against real `gopls` once more** — one comprehensive
+test (`TestRealHoverAutocompleteAndFormatEndToEnd`) drives a single real
+`gopls` session through hover (real text about `fmt.Println`), autocomplete
+(29 real candidates from typing `fmt.`, confirming one actually mutates the
+buffer correctly), and formatting (a deliberately mis-indented line — a
+space instead of a tab — gets genuinely fixed) — all through a live
+`Editor`, not mocked, and specifically chosen to be reentrant-lock-
+sensitive (a locking mistake would hang the test rather than fail it
+cleanly). Both real tagged production binaries (`gui-local`/`tui-local`,
+built with the full `GRAMMAR_TAGS` set) still build clean. Frontend
+rendering itself follows this codebase's existing, documented asymmetry:
+`tui-base`'s new `wrapText` (pure logic) got real unit tests; `gui-base`'s
+equivalent is its **first test file ever** for the same reason (pure
+`wrapText` logic, no Gio context needed) — but the actual popup rendering
+in both frontends is build+vet+smoke-run verified only, same as all
+existing gui-base rendering code, since exercising a live popup requires
+real keyboard input into a running window that isn't scriptable in this
+environment.
+
+**Diagnostics rendering changed from color-override to underline (same
+day)**, after the user asked about squiggly underlines: `Editor.StyleSpans`
+no longer includes diagnostics at all (reverted the earlier merge) — a new
+`Editor.DiagnosticSpans(start, end)` exposes them separately, so a
+frontend renders a token's syntax color *and* an independent diagnostic
+underline rather than one replacing the other. `gui-base` draws a real,
+independently-colored underline (`withDiagnosticUnderline`/
+`diagnosticColor`) since it draws every glyph itself — no toolkit
+limitation there. `tui-base` uses tview's real `u`/`U` tag attribute
+(confirmed via reading tview's actual tag parser source, not assumed) —
+but genuinely can't color the underline separately from the text color
+through that API, a real, checked limitation of tview's tag-string
+convenience layer (`tcell.Style.Underline` itself does support a color
+parameter, just not reachable through tags) — documented in
+`tviewStyleColor`'s doc comment rather than silently accepted. A real
+attribute-leakage bug class was avoided by design: tview tags are sticky
+across a styled string unless explicitly reset, so every emitted tag now
+always states the underline attribute explicitly (`u` or `U`), never
+relying on omission to mean "unchanged."
+
+**Diagnostic severity color + virtual text, same day, after live user
+testing**: user asked for the underline to actually show its severity
+color (not inherit the text's own color) and for the diagnostic's message
+to show as inline virtual text (vim/nvim-style). The color ask exposed the
+real reason for `tui-base`'s "monochrome underline" limitation noted
+above: tview ties underline to the same foreground color as the text, so
+there's no way to underline in red while keeping a token's own syntax
+color in the terminal. Resolved by accepting that constraint deliberately
+— a diagnosed rune's color becomes its severity color in `tui-base`
+(matching how most terminal tools show diagnostics anyway), while
+`gui-base` keeps doing both independently (its own drawn underline was
+never subject to this limitation).
+
+Virtual text needed real new plumbing, not just a rendering tweak: added
+`viewmanager.DiagnosticSpan{TextRange, Style, Message}` (a new file,
+`diagnostic.go`) — deliberately **not** folded into `StyledSpan`, which
+stays general-purpose syntax-rendering vocabulary with no room for a
+message string. `Editor.diagnostics`/`DiagnosticSpans` changed type
+accordingly; `lsp.go`'s diagnostics handler now preserves the real
+`lspclient.Diagnostic.Message` instead of discarding it. Both frontends
+show a dim, truncated (rune-safe, not byte-truncated), newline-collapsed
+one-line summary after the diagnosed line's own content — real message
+text from the server, not a placeholder.
+
+Deliberately deferred, per the user's own instinct that it's bigger scope:
+code actions / quick-fixes (a picker UI + `workspace/applyEdit`) — agreed
+this is real, separate, "Part 4"-shaped work, not a quick add on top of
+virtual text.
+
+**Real performance bug found and fixed (2026-09-21)**, reported by the
+user as stutter scrolling down through a large file with `j`: confirmed,
+measured, and fixed — not a guess. `internal/syntax.Highlighter.Spans`
+was doing a linear scan over *every* highlight range in the whole
+document on every call, not just the visible window; a synthetic
+2000-function Go file produced over 16,000 ranges, and `Spans` is called
+once per render frame — including pure cursor movement (`j`/`k` never
+touch the highlighter's incremental-update path, since no text changes),
+so scrolling paid an O(total document tokens) cost on every keystroke,
+contradicting this project's own "per-keystroke work stays bounded to the
+visible range" principle. Fixed exactly, not heuristically: confirmed
+empirically that `h.ranges` comes back sorted by `StartByte` from
+`gotreesitter`, then added a `maxEndSoFar` prefix-max array (kept in sync
+via a new `setRanges` — the one place `h.ranges` is ever assigned) so
+`Spans` can binary-search a real, correct lower bound even for a long
+range (e.g. a block comment) starting well before the query window —
+plain binary search on `StartByte` alone would have missed that case.
+`Spans` is now O(log n + k) instead of O(n), k being the tokens actually
+in view. Measured, not assumed: 2.7x faster at 500 functions, 4.1x at
+2000, **29x at 8000** — the gap widens with file size exactly as the
+complexity analysis predicts, confirmed via a real before/after benchmark
+(not kept in the shipped test suite — the fix itself is, along with a
+correctness test for the long-range-before-the-window case and a
+`BenchmarkSpansOnLargeDocument` giving a real absolute number for the
+current implementation). `viewmanager.DiagnosticSpansForRange` has the
+same *class* of linear-scan issue, deliberately not fixed here — real
+diagnostic counts are orders of magnitude smaller than syntax token
+counts in practice, so it's a real but much lower-priority version of the
+same thing, not overlooked.
+
+Visual mode (Known issues item 1) remains open and unrelated to any of the
+above. Go-to-definition and everything it drags in (multi-buffer/
+workspace, workspace-wide search) is the deliberately separate, not-yet-
+started Part 3.
+
+**Deliberate pause before Part 3, 2026-09-24**: rather than starting
+Part 3 on top of `internal/editor` as it stood after the LSP work above,
+the user read through the package end-to-end and did a real structural
+review — not because anything is broken (it all works, and is verified),
+but because `editor.go` in particular had grown organically to 738 lines
+across a lot of fast, feature-focused sessions. The concrete result is a
+real refactor list in `BACKLOG.md`'s "`internal/editor` structural
+refactor" section — bundling scattered LSP fields into one struct, moving
+a few standalone algorithms (auto-pairing, multi-edit apply) out of
+`Editor` into places that don't need its state to reason about them, and
+giving command-mode (`:...`) parsing its own package the same way
+Normal-mode already got `internal/keyengine`. None of it is done yet —
+Part 3 should either wait for it or at least not make it harder.
 
 ## Module & toolchain
 
@@ -319,6 +550,13 @@ render (Known issues item 3) are the most likely near-term picks.
 - Key dependencies:
   - `gioui.org` — immediate-mode GUI toolkit, used by `internal/gui-base`
   - `github.com/rivo/tview` (+ `github.com/gdamore/tcell/v2`) — terminal UI toolkit, used by `internal/tui-base`
+  - `github.com/odvcencio/gotreesitter` — pure-Go tree-sitter runtime (no
+    cgo), used by `internal/syntax` for real syntax highlighting. Only the
+    curated language subset is compiled in via build tags — see
+    Taskfile.yaml's `GRAMMAR_TAGS` var; building without those tags
+    (e.g. a bare `go build ./...`, as `go vet`/tests already do) links in
+    the library's full ~200-language fleet instead, which still works but
+    produces a much larger binary.
 - No CI configuration and no linter config exist yet. `go vet` and `go test`
   are the only automated checks.
 
@@ -360,13 +598,45 @@ can end up in a dependency cycle with `editor` or with each other.
   `*keyengine.CommandContext`. `HandleKey` (in `dispatch.go`) is the single
   entry point for all keyboard input: it routes on mode — Insert/Command
   mode capture keys literally (no vim grammar applies to "just type this
-  character"); Normal (and eventually Visual) mode hands the key to
-  `keyengine.CommandContext.ProcessCommand`, and once a sequence resolves,
-  `execute()` (also in `dispatch.go`) resolves the command's offset/range
-  via `internal/offset` and applies the verb via `piecetable`/`Editor`.
-  Also handles file I/O, vim-style command mode (`:w`, `:e`, `:q`/`:q!`,
-  `:wq` via `ExecuteCommand`), and `Undo`/`Redo`. This is "the point of
-  contact for the gui or tui" per its package doc comment.
+  character") — though Insert mode's literal capture still does two real
+  things of its own, not just plain insertion: auto-closing brackets and
+  quotes (`insertRuneWithAutoPairing`/`bracketPairs`/`quoteRunes` — typing
+  `{`/`(`/`[` inserts the matching close too and lands the cursor between
+  them, typing the close yourself skips over an already-auto-inserted one
+  instead of doubling up, and `<BS>` collapses an empty pair in one edit,
+  added 2026-09-19; `"`/`'`/`` ` `` get the same treatment via
+  `shouldPairQuoteHere`, a heuristic that only pairs when neither
+  neighboring character is a word character, so typing a contraction like
+  `don't` doesn't trigger an unwanted pair on the apostrophe) and
+  tree-based auto-indent on `<Enter>` (see `internal/syntax` below).
+  Normal (and eventually Visual) mode hands the
+  key to `keyengine.CommandContext.ProcessCommand`, and once a sequence
+  resolves, `execute()` (also in `dispatch.go`) resolves the command's
+  offset/range via `internal/offset` and applies the verb via
+  `piecetable`/`Editor`. Also handles file I/O, vim-style command mode
+  (`:w`, `:e`, `:q`/`:q!`, `:wq`, and — added 2026-09-20 —
+  `:LspInstall`/`:LspUninstall`/`:LspStatus`, all via `ExecuteCommand`), and
+  `Undo`/`Redo`. This is "the point of contact for the gui or tui" per its
+  package doc comment.
+
+  `async.go` (added 2026-09-20, alongside the LSP-installer commands above)
+  is the concrete answer to the long-open "Concurrency/async orchestration"
+  item: an `asyncResults chan asyncApply` drained by one dedicated goroutine
+  (started once, from both constructors) that takes `e.mu.Lock()` around
+  each queued closure before invoking it — every async producer
+  (`:LspInstall` today; diagnostics/completion/hover once Part 2 of the LSP
+  plan lands) funnels through `Editor.runAsync(work func() asyncApply)`
+  instead of separately reasoning about locking `Editor` correctly. Paired
+  with a new `StatusMessage()` accessor — deliberately not a reuse of
+  `GetLastCommandError()`, which is explicitly error-shaped (skips
+  `ErrQuit`) — for non-error progress text like "installing gopls..."; both
+  frontends show it in the status bar right next to the existing error
+  segment. Verified end-to-end, not just unit-tested: a real
+  `:LspInstall go` through a live `Editor` genuinely installs `gopls` and
+  `StatusMessage()` reports the real result once the background goroutine
+  finishes (`internal/editor/lspcommands_test.go`'s
+  `TestLspInstallGoRealEndToEndThroughEditor`, gated behind
+  `LSPMANAGER_INTEGRATION=1`).
 - **`internal/keyengine`** — parses vim-style keystroke sequences into a
   resolved `ExecutableCommand{Count, Verb, Modifier, Noun}`. Zero
   dependency on `piecetable`, `offset`, or `Editor` — keystrokes in, a
@@ -379,8 +649,10 @@ can end up in a dependency cycle with `editor` or with each other.
   verb/modifier/noun, `availableDirects`
   (`map[string]DirectAction{Verb, Modifier, Noun}`), covers keys that
   execute immediately with no further input: `w`/`b`/`e` (silent motions,
-  reusing the same noun identities `diw`/`daw` resolve), `u`/`<C-r>`/`r`
-  (editor-level commands), `:`/`i`/`o`/`O` (mode switches / line-opening).
+  reusing the same noun identities `diw`/`daw` resolve), `h`/`j`/`k`/`l`
+  and their arrow-key equivalents (plain cursor motion, added 2026-09-19
+  — see Known issues history), `u`/`<C-r>`/`r` (editor-level commands),
+  `:`/`i`/`o`/`O` (mode switches / line-opening).
   This replaced `internal/editor/keymap` (deleted 2026-09-13) entirely.
 - **`internal/types`** — the shared kernel: small, dependency-free enums
   every other package agrees on, imported freely but never importing
@@ -426,15 +698,62 @@ can end up in a dependency cycle with `editor` or with each other.
   the pure lookup/filter functions, and `types.Style` (a small semantic
   category enum — keyword, string, diagnostic-error, etc. — colors are
   each frontend's own concern, matching how `Mode` already works).
-  Exposed via `Editor.StyleSpans(start, end)`, which is real and tested
-  but always returns empty today — nothing produces a real `StyledSpan`
-  yet (no syntax analyzer exists). **Wired into both frontends' actual
-  rendering as of 2026-09-19**: `gui-base`'s `renderLine` and `tui-base`'s
-  per-line loop both fetch spans and color runes per `StyleAt`, falling
-  back to the cheap plain-text path when a line has none (identical
-  output to before `StyledSpan` existed, verified by tests) — so the
-  moment a real producer populates `Editor.styleSpans`, highlighting
-  renders with no further frontend changes needed.
+  Exposed via `Editor.StyleSpans(start, end)`. **Wired into both
+  frontends' actual rendering as of 2026-09-19**: `gui-base`'s
+  `renderLine` and `tui-base`'s per-line loop both fetch spans and color
+  runes per `StyleAt`, falling back to the cheap plain-text path when a
+  line has none (identical output to before `StyledSpan` existed,
+  verified by tests). `Editor.StyleSpans` now returns real spans for every
+  curated `types.Language` — see `internal/syntax` below, the first real
+  producer.
+- **`internal/syntax`** — real syntax highlighting, added 2026-09-19.
+  Wraps `github.com/odvcencio/gotreesitter` (a pure-Go tree-sitter
+  runtime — no cgo anywhere, works on every platform including WASM;
+  chosen deliberately over the canonical C library specifically to avoid
+  this project's cgo/cross-compile/WASM tension, see Vision & direction
+  and the Roadmap's treesitter history). `Highlighter` keeps one
+  incrementally-updated parse tree per buffer: `Reparse` for a full parse
+  (new buffer, or the table replaced wholesale), `Update(edit, source)`
+  for an incremental one (fed the same `piecetable.Edit` shape
+  `Editor.ChangeChan` already carries), `Spans(start, end)` translating
+  the tree into `viewmanager.StyledSpan`s via a small capture-name→`Style`
+  prefix mapping, and `IndentAt(offset)` (added 2026-09-19, same day as a
+  live bug report: `o` opened lines with no indent at all) — real
+  tree-based auto-indent, deliberately not brace-counting the raw text
+  (which misfires on a `{`/`}` sitting inside a string or comment, exactly
+  the class of bug a real parse tree avoids). Counts nested
+  `indentContainerTypes` ancestors at a position — a per-language table of
+  which node type means "one more indent level" (Go/CSS/SCSS/Dart:
+  `block`; C/C++/PHP: `compound_statement`; JS/TS/TSX: `statement_block`;
+  JSON: `object`/`array`; YAML: `block_mapping`/`block_sequence`; HTML:
+  `element` — each verified empirically against a real parse, not
+  guessed; Dockerfile/Markdown have no entry, correctly returning 0/flush
+  left, since neither nests via a brace-like container). Wired into
+  `Editor.IndentStringAt` (one tab per level), consumed by `o`/`O`
+  (`dispatch.go`'s `openLine`) and `<Enter>` in Insert mode — the two
+  needed different insert orderings (`indent+"\n"` for `openLine`, since
+  its insertion point already sits at the *next* row's boundary;
+  `"\n"+indent` for `<Enter>`, which splits a line's existing content
+  instead) — see `openLine`'s doc comment for the exact reasoning, worth
+  reading before touching this again. `grammarName` is the one place
+  mapping `types.Language` to the library's grammar registry names —
+  adding a language is adding a case there (the grammar itself is almost
+  certainly already bundled, see below). Wired into `Editor` at
+  `moveCursorToLocked` (every incremental edit) and
+  `setupHighlighterLocked` (called on construction and whenever the
+  table is replaced wholesale — `OpenFile`, `:e`). Bundles only the
+  curated language set via Go build tags (`grammar_subset_<lang>` — see
+  Taskfile.yaml's `GRAMMAR_TAGS` var and the two `.air.*.toml` build
+  commands), roughly halving binary size versus the library's full
+  ~200-language fleet. A 2026-09-19 prototype verified, for every language
+  in the curated set (Go, TypeScript, TSX, JavaScript, HTML, CSS, SCSS,
+  PHP, Dart, C, C++, YAML, JSON, Dockerfile, Markdown): full-quality parse
+  support (no missing external-scanner gaps), correct real parses
+  (including TSX's notoriously ambiguous JSX-in-TypeScript grammar), a
+  working `GOOS=js GOARCH=wasm` build, and real subset-tag binary-size
+  reduction — see `internal/syntax/syntax_test.go`'s
+  `TestGrammarNameCoversEveryCuratedLanguage` for the same guarantee kept
+  honest in CI.
 - **`internal/gui-base`**, **`internal/tui-base`** — thin, single-file
   (`base.go`) front ends, one per toolkit. Both hold an `*editor.Editor` and
   render a Tokyo Night–themed view + status bar, and both route every
@@ -481,7 +800,56 @@ can end up in a dependency cycle with `editor` or with each other.
     filters are opt-in and precise by design — nothing is delivered "by
     default," so audit any wildcard filter for what it's silently
     excluding rather than assuming broad coverage.
-- **`platform/`** — empty placeholder for future platform-specific code.
+- **`platform/`** — no longer an empty placeholder as of 2026-09-20: OS/
+  arch-specific concerns nothing else owned. `paths.go`'s `CacheDir`/
+  `ConfigDir` (both `os.UserCacheDir`/`os.UserConfigDir`-backed) are the
+  first config/cache-directory convention this codebase has ever had — used
+  today by `internal/lspmanager` for installed language servers, reusable
+  later for settings/plugin state. `arch.go`'s `MasonTargetCandidates`/
+  `CurrentTargets` map Go's `GOOS`/`GOARCH` onto mason-registry's own target
+  vocabulary (`linux_x64_gnu`, `darwin_arm64`, etc.), most-specific-first,
+  with a best-effort musl-vs-glibc detection on Linux.
+- **`internal/lspmanager`** — a real, working language-server installer
+  (added 2026-09-20, Part 1 of the LSP integration plan), consuming
+  `mason-registry`'s live published data
+  (`github.com/mason-org/mason-registry`) rather than a hand-rolled
+  manifest — same data Neovim's Mason plugin uses, confirmed against a real
+  fetch rather than assumed (its release publishes a `registry.json.zip`
+  asset; `registry.go` downloads and parses it, filtered to just the
+  curated language list's ~12 package names, cached to disk so `:LspInstall`
+  doesn't need network on every call). `catalog.go` is the curated
+  `types.Language` → mason-registry package table, every entry read
+  directly out of a real registry dump: Go→`gopls` (`go install`),
+  TypeScript/JS/TSX→`typescript-language-server`, HTML/CSS/SCSS/JSON→the
+  `vscode-langservers-extracted` trio, PHP→`intelephense`, YAML→
+  `yaml-language-server` (all five npm-installed), C/C++→`clangd`,
+  Markdown→`marksman`, Dockerfile→`docker-language-server` (all three
+  direct GitHub-release binaries, no runtime dependency), Dart→detected on
+  `PATH` only (ships with its own SDK, nothing to install). `install.go`
+  checks a package's declared runtime dependency (Node, a Go toolchain, or
+  none) via `exec.LookPath` and fails with an actionable message if
+  missing — checked lazily, only for the specific server being installed,
+  never as a blanket requirement, per an explicit product decision. Real
+  archive extraction (zip/tar.gz, with zip-slip protection) and a small
+  mason-registry-template resolver (`{{version}}`,
+  `{{ version | strip_prefix "v" }}`, and the `{{source.asset.*}}`
+  self-reference forms) round out the GitHub-binary path. `index.go`
+  persists what's actually installed (`~/.cache/pieces-store/lsp-servers/
+  index.json` on Linux) so `:LspStatus` reflects real, restart-durable
+  state rather than in-memory-only bookkeeping. **Zero new third-party
+  dependencies** — everything above is stdlib (`net/http`, `archive/zip`,
+  `archive/tar`, `os/exec`). Verified end-to-end against the live registry
+  and real toolchains, not just unit-tested: real `gopls`, a real npm-
+  installed `yaml-language-server`, and a real downloaded-and-extracted
+  `marksman` binary were each installed for real and made to run
+  (`internal/lspmanager`'s `*_integration_test.go` files, gated behind
+  `LSPMANAGER_INTEGRATION=1` so normal `go test ./...` stays network-free).
+  One real bug this caught before it shipped: `marksman`'s actual
+  per-target asset objects carry no `bin` field at all (only
+  `docker-language-server`'s do, as the literal template
+  `"{{source.asset.file}}"`) — an empty `asset.Bin` needs the identical
+  "the downloaded file itself is the binary" fallback, not just the literal
+  template string.
 
 ## Build / test / run
 
@@ -524,10 +892,24 @@ dirty-tracking on `:q` (added — `Dirty` on `piecetable.Table`, `:q!` force-
 quits), `MoveCursorDown`'s missing bounds check / unused `anchors`
 param (fixed — see `editor.go`, anchoring only helps the Down direction,
 Up genuinely can't benefit from it without also tracking each line's start
-offset, see the comment there), and `gui-base` bypassing the key engine
+offset, see the comment there), `gui-base` bypassing the key engine
 with its own inline key-handling switch (rebuilt 2026-09-19 to route
 through `Editor.HandleKey`/`InsertLiteralText` and render via
-`Editor.Viewport` — see Current phase).
+`Editor.Viewport` — see Current phase), and — found live by the user
+after everything above shipped — `h`/`j`/`k`/`l` and the arrow keys had no
+table entries at all in the rebuilt `internal/keyengine` (the original
+14-case list never included them, so the only way to move the cursor at
+all in Normal mode was repeated `w`). Fixed 2026-09-19: `h`/`l` and their
+arrow-key equivalents resolve through the same generic `Move`-verb
+pipeline as `w`/`b`/`e` (new `CharBackward`/`CharForward` nouns); `j`/`k`
+are special-cased in `executeMove` to call `moveCursorUpLocked`/
+`moveCursorDownLocked` directly, since preserving the cursor's column
+across differently-sized lines needs current Row/Col state, not just a
+byte offset the way every other motion works. Arrow keys also now move
+the cursor in Insert mode (handled directly in `handleInsertModeKey`,
+bypassing the key engine entirely, same as `<BS>`/`<Enter>` already did) —
+previously not wired into either frontend's key translation at all, in
+any mode.
 
 Known gaps as of now:
 

@@ -1,5 +1,15 @@
 version: '3'
 
+vars:
+  # Grammar subset tags for internal/syntax's tree-sitter binding
+  # (github.com/odvcencio/gotreesitter) — one grammar_subset_<lang> tag per
+  # curated language (see internal/types.Language and
+  # internal/syntax.grammarName). Bundling only these instead of the
+  # library's full ~200-language fleet roughly halves binary size (see the
+  # 2026-09-19 prototype). Adding a language: add it to both those two
+  # places *and* here.
+  GRAMMAR_TAGS: grammar_subset,grammar_subset_go,grammar_subset_typescript,grammar_subset_tsx,grammar_subset_javascript,grammar_subset_html,grammar_subset_css,grammar_subset_scss,grammar_subset_php,grammar_subset_dart,grammar_subset_c,grammar_subset_cpp,grammar_subset_yaml,grammar_subset_json,grammar_subset_dockerfile,grammar_subset_markdown
+
 tasks:
   default:
     desc: List all available tasks
@@ -26,8 +36,8 @@ tasks:
     cmds:
       - mkdir -p tmp
       - go build -o tmp/api-local ./cmd/api/main.go
-      - go build -o tmp/gui-local ./cmd/gui/main.go
-      - go build -o tmp/tui-local ./cmd/tui/main.go
+      - go build -tags "{{.GRAMMAR_TAGS}}" -o tmp/gui-local ./cmd/gui/main.go
+      - go build -tags "{{.GRAMMAR_TAGS}}" -o tmp/tui-local ./cmd/tui/main.go
 
   clean:
     desc: Clean build artifacts and temporary files
@@ -53,12 +63,12 @@ tasks:
   tui:
     desc: Run the TUI application interactively on the host terminal
     cmds:
-      - go run ./cmd/tui/main.go
+      - go run -tags "{{.GRAMMAR_TAGS}}" ./cmd/tui/main.go
 
   tui-docker:
     desc: Run the TUI application interactively inside a Docker container
     cmds:
-      - docker compose run --rm tui go run ./cmd/tui/main.go
+      - docker compose run --rm tui go run -tags "{{.GRAMMAR_TAGS}}" ./cmd/tui/main.go
 
   dev:
     desc: Start the Dev/Engine service in Docker Compose

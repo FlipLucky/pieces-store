@@ -57,10 +57,14 @@ const (
 // used to pick a treesitter grammar and, eventually, an LSP languageId.
 // Detected from the file extension only (see DetectLanguage); no content
 // sniffing, shebang detection, or special-cased filenames (Makefile,
-// Dockerfile, etc.) yet — deliberately a small starter set, same
-// "add a table entry" extension philosophy as Style. LanguagePlainText
-// (the zero value) is both the fallback for an unrecognized extension and
-// the correct answer for an unsaved buffer with no file path at all.
+// Dockerfile itself being the one deliberate exception, since it has no
+// extension at all) yet. This is the curated, deliberately-bounded
+// language set decided 2026-09-19 — the ones the project actually needs,
+// not an attempt at broad coverage; extending it is still just "add a
+// table entry" (here, and in internal/syntax's grammar-name mapping).
+// LanguagePlainText (the zero value) is both the fallback for an
+// unrecognized extension and the correct answer for an unsaved buffer
+// with no file path at all.
 type Language int
 
 const (
@@ -70,7 +74,16 @@ const (
 	LanguageGo
 	LanguageJSON
 	LanguageJavaScript
+	LanguageTypeScript
+	LanguageTSX
 	LanguageCSS
+	LanguageSCSS
+	LanguagePHP
+	LanguageDart
+	LanguageC
+	LanguageCPP
+	LanguageYAML
+	LanguageDockerfile
 )
 
 func (l Language) String() string {
@@ -85,19 +98,41 @@ func (l Language) String() string {
 		return "JSON"
 	case LanguageJavaScript:
 		return "JavaScript"
+	case LanguageTypeScript:
+		return "TypeScript"
+	case LanguageTSX:
+		return "TSX"
 	case LanguageCSS:
 		return "CSS"
+	case LanguageSCSS:
+		return "SCSS"
+	case LanguagePHP:
+		return "PHP"
+	case LanguageDart:
+		return "Dart"
+	case LanguageC:
+		return "C"
+	case LanguageCPP:
+		return "C++"
+	case LanguageYAML:
+		return "YAML"
+	case LanguageDockerfile:
+		return "Dockerfile"
 	default:
 		return "Plain Text"
 	}
 }
 
-// DetectLanguage maps a file path's extension to a Language —
-// case-insensitive, and the only signal used today (see Language's doc
-// comment for what's deliberately not attempted yet). An empty path or
-// an unrecognized extension both correctly fall through to
-// LanguagePlainText.
+// DetectLanguage maps a file path's extension (or, for Dockerfile
+// specifically, its base name — it has no extension) to a Language,
+// case-insensitively. An empty path or an unrecognized extension both
+// correctly fall through to LanguagePlainText.
 func DetectLanguage(filePath string) Language {
+	base := strings.ToLower(filepath.Base(filePath))
+	if base == "dockerfile" || strings.HasPrefix(base, "dockerfile.") {
+		return LanguageDockerfile
+	}
+
 	switch strings.ToLower(filepath.Ext(filePath)) {
 	case ".md", ".markdown":
 		return LanguageMarkdown
@@ -107,10 +142,26 @@ func DetectLanguage(filePath string) Language {
 		return LanguageGo
 	case ".json":
 		return LanguageJSON
-	case ".js":
+	case ".js", ".mjs", ".cjs":
 		return LanguageJavaScript
+	case ".ts":
+		return LanguageTypeScript
+	case ".tsx":
+		return LanguageTSX
 	case ".css":
 		return LanguageCSS
+	case ".scss":
+		return LanguageSCSS
+	case ".php":
+		return LanguagePHP
+	case ".dart":
+		return LanguageDart
+	case ".c", ".h":
+		return LanguageC
+	case ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx":
+		return LanguageCPP
+	case ".yaml", ".yml":
+		return LanguageYAML
 	default:
 		return LanguagePlainText
 	}

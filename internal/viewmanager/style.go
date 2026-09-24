@@ -8,9 +8,11 @@ import (
 // StyledSpan is a range of the document that should render with a
 // particular Style — the same offset.TextRange vocabulary used for
 // motions and delete ranges, reused here for rendering rather than
-// invented fresh. Nothing produces real StyledSpans yet (no syntax
-// analyzer exists) — this is the contract a future one (or an LSP
-// diagnostics layer) will populate.
+// invented fresh. Populated today by internal/syntax's tree-sitter
+// highlighter (see Editor.StyleSpans). LSP diagnostics deliberately don't
+// use this type — see DiagnosticSpan in diagnostic.go — since a
+// diagnostic carries a message StyledSpan has no room for and shouldn't
+// be stretched to fit.
 type StyledSpan struct {
 	offset.TextRange
 	Style types.Style

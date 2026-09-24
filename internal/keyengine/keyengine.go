@@ -30,6 +30,7 @@ const (
 	EnterCommand
 	OpenBelow
 	OpenAbove
+	Hover // K — request LSP hover at the cursor, added 2026-09-20
 
 	// Modifiers
 	Inside
@@ -42,6 +43,18 @@ const (
 	LineMotion
 	Paragraph
 	RuneMotion // declared for future use (x etc.) — not yet registered in any table
+
+	// h/l are plain single-char motions — CharBackward/CharForward resolve
+	// through the same generic offset-based Move pipeline as Word/
+	// WordBackward/WordEnd (see resolveMotion), no special-casing needed.
+	// j/k (LineUp/LineDown) are different in kind: preserving the cursor's
+	// intended column across lines of different lengths needs the current
+	// Row/Col state, not just a byte offset, so they're special-cased in
+	// executeMove instead of going through the generic pipeline.
+	CharBackward
+	CharForward
+	LineUp
+	LineDown
 )
 
 // ErrInconsistentKeymap signals a whitelist/semantic-table mismatch: a key

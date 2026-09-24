@@ -1,0 +1,224 @@
+[
+  {
+    "name": "gopls",
+    "description": "gopls (pronounced \"Go please\") is the official Go language server developed by the Go team. It provides IDE features\nto any LSP-compatible editor.\n",
+    "homepage": "https://pkg.go.dev/golang.org/x/tools/gopls",
+    "licenses": [
+      "BSD-3-Clause"
+    ],
+    "languages": [
+      "Go"
+    ],
+    "categories": [
+      "LSP"
+    ],
+    "source": {
+      "id": "pkg:golang/golang.org/x/tools/gopls@v0.23.0"
+    },
+    "bin": {
+      "gopls": "golang:gopls"
+    },
+    "neovim": {
+      "lspconfig": "gopls"
+    }
+  },
+  {
+    "name": "typescript-language-server",
+    "description": "TypeScript & JavaScript Language Server.",
+    "homepage": "https://github.com/typescript-language-server/typescript-language-server",
+    "licenses": [
+      "MIT"
+    ],
+    "languages": [
+      "TypeScript",
+      "JavaScript"
+    ],
+    "categories": [
+      "LSP"
+    ],
+    "source": {
+      "id": "pkg:npm/typescript-language-server@6.0.0",
+      "extra_packages": [
+        "typescript@6.0.3"
+      ]
+    },
+    "schemas": {
+      "lsp": "vscode:https://raw.githubusercontent.com/microsoft/vscode/main/extensions/typescript-language-features/package.json"
+    },
+    "bin": {
+      "typescript-language-server": "npm:typescript-language-server"
+    },
+    "neovim": {
+      "lspconfig": "ts_ls"
+    }
+  },
+  {
+    "name": "html-lsp",
+    "description": "Language Server Protocol implementation for HTML.",
+    "homepage": "https://github.com/microsoft/vscode-html-languageservice",
+    "licenses": [
+      "MIT"
+    ],
+    "languages": [
+      "HTML"
+    ],
+    "categories": [
+      "LSP"
+    ],
+    "source": {
+      "id": "pkg:npm/vscode-langservers-extracted@4.10.0"
+    },
+    "schemas": {
+      "lsp": "vscode:https://raw.githubusercontent.com/microsoft/vscode/main/extensions/html-language-features/package.json"
+    },
+    "bin": {
+      "vscode-html-language-server": "npm:vscode-html-language-server"
+    },
+    "neovim": {
+      "lspconfig": "html"
+    }
+  },
+  {
+    "name": "clangd",
+    "description": "clangd understands your C++ code and adds smart features to your editor: code completion, compile errors,\ngo-to-definition and more.\n",
+    "homepage": "https://clangd.llvm.org",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "languages": [
+      "C",
+      "C++"
+    ],
+    "categories": [
+      "LSP"
+    ],
+    "source": {
+      "id": "pkg:github/clangd/clangd@23.1.0",
+      "asset": [
+        {
+          "target": [
+            "darwin_x64",
+            "darwin_arm64"
+          ],
+          "file": "clangd-mac-{{version}}.zip",
+          "bin": "clangd_{{version}}/bin/clangd"
+        },
+        {
+          "target": "linux_x64_gnu",
+          "file": "clangd-linux-{{version}}.zip",
+          "bin": "clangd_{{version}}/bin/clangd"
+        },
+        {
+          "target": "win_x64",
+          "file": "clangd-windows-{{version}}.zip",
+          "bin": "clangd_{{version}}/bin/clangd.exe"
+        }
+      ]
+    },
+    "schemas": {
+      "lsp": "vscode:https://raw.githubusercontent.com/clangd/vscode-clangd/master/package.json"
+    },
+    "bin": {
+      "clangd": "{{source.asset.bin}}"
+    },
+    "neovim": {
+      "lspconfig": "clangd"
+    }
+  },
+  {
+    "name": "phpactor",
+    "description": "Phpactor is an intelligent Completion and Refactoring tool for PHP which is available over it\u2019s own RPC protocol and\nas a Language Server.\n",
+    "homepage": "https://phpactor.readthedocs.io/en/master/",
+    "licenses": [
+      "MIT"
+    ],
+    "languages": [
+      "PHP"
+    ],
+    "categories": [
+      "LSP"
+    ],
+    "source": {
+      "id": "pkg:github/phpactor/phpactor@2026.07.22.0",
+      "asset": {
+        "file": "phpactor.phar"
+      }
+    },
+    "bin": {
+      "phpactor": "php:phpactor.phar"
+    },
+    "neovim": {
+      "lspconfig": "phpactor"
+    }
+  },
+  {
+    "name": "marksman",
+    "description": "Markdown LSP server providing completion, cross-references, diagnostics, and more.",
+    "homepage": "https://github.com/artempyanykh/marksman",
+    "licenses": [
+      "MIT"
+    ],
+    "languages": [
+      "Markdown"
+    ],
+    "categories": [
+      "LSP"
+    ],
+    "source": {
+      "id": "pkg:github/artempyanykh/marksman@2026-02-08",
+      "asset": [
+        {
+          "target": [
+            "darwin_x64",
+            "darwin_arm64"
+          ],
+          "file": "marksman-macos"
+        },
+        {
+          "target": "linux_x64",
+          "file": "marksman-linux-x64"
+        },
+        {
+          "target": "linux_arm64",
+          "file": "marksman-linux-arm64"
+        },
+        {
+          "target": "win_x64",
+          "file": "marksman.exe"
+        }
+      ]
+    },
+    "bin": {
+      "marksman": "{{source.asset.file}}"
+    },
+    "neovim": {
+      "lspconfig": "marksman"
+    }
+  },
+  {
+    "name": "yaml-language-server",
+    "description": "Language Server for YAML Files.",
+    "homepage": "https://github.com/redhat-developer/yaml-language-server",
+    "licenses": [
+      "MIT"
+    ],
+    "languages": [
+      "YAML"
+    ],
+    "categories": [
+      "LSP"
+    ],
+    "source": {
+      "id": "pkg:npm/yaml-language-server@1.24.0"
+    },
+    "schemas": {
+      "lsp": "vscode:https://raw.githubusercontent.com/redhat-developer/vscode-yaml/master/package.json"
+    },
+    "bin": {
+      "yaml-language-server": "npm:yaml-language-server"
+    },
+    "neovim": {
+      "lspconfig": "yamlls"
+    }
+  }
+]

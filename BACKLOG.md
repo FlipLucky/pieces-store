@@ -10,6 +10,104 @@ This is not the same as a blocker: if something here is actually stopping
 the current phase's work, it belongs in `CLAUDE.md`'s Known Issues, not
 here.
 
+## `internal/editor` structural refactor (pre-Part-3 architecture review, 2026-09-24)
+
+The user paused before starting Part 3 (go-to-definition/multi-buffer) to
+read through `internal/editor` end-to-end and review its structure — not
+because anything here is broken, everything listed is fully functional.
+The pattern behind most of these: fast, feature-focused implementation
+work correctly avoided restructuring unrelated code mid-feature (a real,
+legitimate discipline), but that means reorganization never became anyone's
+actual task until a dedicated pass like this one made it one. Grouped by
+theme, not urgency — none of these block anything:
+
+**State that should be bundled, not scattered:**
+- **Bundle the LSP-related `Editor` fields into one dedicated struct** —
+  `lspServer`, `lspLanguage`, `lspVersion`, `lspURI`, `lspCapabilities`,
+  `lspCompletionGeneration`, and arguably `diagnostics` are six-plus
+  separate fields on `Editor` today, all describing one cohesive concept
+  (the current LSP session for the open buffer). Beyond readability, this
+  is a real latent-bug fix: `stopLSPServerLocked` has to remember to reset
+  every one of them together today; a single struct makes "reset to zero
+  value" the only way to do it, rather than relying on nobody forgetting a
+  field. Put it in `lsp.go`, next to the logic that owns it.
+- **`SetMode`'s mode-transition cleanup belongs on `Cursor`, not `Editor`**
+  — `Editor.SetMode` reaches into `Cursor`'s own fields (`CommandBuffer`,
+  `Completion`, `LSPCompletion`) from the outside to decide what to clear
+  on a mode change. `Cursor.SetMode` already exists but is a trivial
+  one-line setter today; give it the real transition logic instead, and
+  `Editor.SetMode` shrinks to lock + delegate + notify.
+- **`CommandBuffer` deserves its own type**, not a raw `string` field on
+  `Cursor` poked at by `Editor` methods (`AppendCommandBuffer`,
+  `BackspaceCommandBuffer`, `ClearCommandBuffer`). `BackspaceCommandBuffer`
+  in particular already does real logic (UTF-8-safe rune slicing to avoid
+  splitting a multi-byte character) — that belongs encapsulated on the
+  type itself (`Append`/`Backspace`/`Clear`/`String` methods), not as
+  `Editor` methods reaching into a bare string.
+- **`CompletionState`/`LSPCompletionState` should own their own cycling** —
+  `Editor` currently does the wraparound index math
+  (`((index+direction)%n+n)%n`) externally for both. Give each state type
+  its own `Cycle(direction)` method instead.
+
+**Logic that leaked into the wrong layer:**
+- **`types.DetectLanguage` shouldn't live in `internal/types`** — `types`
+  is meant to be the shared-kernel enum package (zero logic), and
+  extension-pattern-matching is real logic, not a type definition.
+  Deliberately *not* moving it into an LSP-specific package though: both
+  `internal/syntax` (tree-sitter) and the LSP stack need it equally, so an
+  LSP-owned home would be a backwards dependency for syntax highlighting.
+  Give it its own tiny zero-dependency leaf package instead (e.g.
+  `internal/langdetect`), the same shape `types` already has.
+- **Bracket/quote auto-pairing's decision logic** (`shouldPairQuoteHere`
+  and friends, `internal/editor/dispatch.go`) **and the multi-edit
+  apply-in-reverse-order algorithm** (`applyTextEditsLocked`,
+  `internal/editor/lspfeatures.go`) **are real, standalone algorithms
+  currently living inline in `Editor`** — neither needs `Editor`'s state to
+  reason about (a rune and its neighbors; a list of edits and a source
+  buffer), which is exactly the tell that they belong in their own
+  reusable, independently-testable place rather than mixed into
+  orchestration code.
+- **`IndentStringAt`'s tab-formatting belongs in `internal/syntax`, not
+  `Editor`** — `Editor.indentStringAtLocked` asks the highlighter for a
+  depth (fine, that's orchestration) but then also decides *how* to render
+  it (`strings.Repeat("\t", depth)`, a formatting policy). Give
+  `Highlighter` its own `IndentStringAt(at) string` returning the already-
+  formatted whitespace, so `Editor`'s version becomes a pure passthrough.
+
+**File organization** (no logic changes, just moving code to where its name says it should be):
+- Pull file-related `Editor` methods (`NewEditorFromFile`, `OpenFile`,
+  `SaveFile`, `SaveFileAs`, `GetFilePath`, `Language()`) out of `editor.go`
+  into their own `internal/editor/file.go` — mirrors the split
+  `piecetable` already has (table/reader/writer/file).
+- Move `MoveCursorLeft`/`Right`/`Up`/`Down` (and their `*Locked` bodies) out
+  of `editor.go` into `cursor.go` — `cursor.go` today only holds the
+  `Cursor` *type*, no cursor behavior; the file's name should match its
+  actual job.
+- Remove the `SIMULATE=true` typing-demo goroutine in `NewEditor`
+  (`internal/editor/editor.go`) — a leftover from the project's earliest
+  prototype phase, no longer needed. Note for whoever does this: it's not
+  the *only* reason `Editor`'s state needs its mutex on every access,
+  including plain getters — the async/LSP work introduced real concurrent
+  access independent of this demo code, so removing it doesn't relax any
+  locking.
+
+**A real missing package, mirroring one that already exists:**
+- **Command-mode (`:...`) parsing deserves its own package, the same way
+  Normal-mode keystrokes got `internal/keyengine`** — `executeCommandLocked`
+  (`internal/editor/editor.go`) has grown to 9 cases (`w`/`e`/`q`/`q!`/`wq`/
+  `LspInstall`/`LspUninstall`/`LspStatus`/`Format`) as a flat
+  `strings.Fields` + switch, while Normal-mode input gets a real, separate
+  parser package. Explicitly *not* an extension of `keyengine` itself —
+  its `ExecutableCommand{Count,Verb,Modifier,Noun}` shape is built for
+  vim's verb/modifier/noun grammar specifically, and command-mode text
+  (space-separated tokens, closer to a shell line) doesn't fit that shape.
+  A new package (vim's own term for these is "Ex commands" — `internal/exmode`
+  or similar) should own parsing only (`Parse(raw string) Command{Name,
+  Args}`), the same "resolve, never act" discipline `keyengine` already
+  follows — `Editor`'s command dispatcher keeps doing what `execute()`
+  already does for `keyengine`'s output: take the resolved command, call
+  the right `Editor` method.
+
 **Resolved since the last pass (2026-09-13), removed from this list**: the
 undo/redo model decision (settled — symmetric redo stack on
 `piecetable.Table`, see `writer.go`'s `Undo`/`Redo`); `:q`'s missing dirty
