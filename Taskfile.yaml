@@ -31,6 +31,44 @@ tasks:
     cmds:
       - go test -v ./...
 
+  coverage:
+    desc: Run tests with a per-package coverage summary
+    cmds:
+      - go test -cover ./...
+
+  coverage-pkg:
+    desc: >-
+      Coverage for one package path, given after `--` (defaults to
+      everything if omitted). Example: task coverage-pkg -- ./internal/clipboard-register
+    cmds:
+      - go test -cover {{.CLI_ARGS | default "./..."}}
+
+  coverage-func:
+    desc: Run tests and show per-function coverage in the terminal
+    cmds:
+      - mkdir -p tmp
+      - go test -coverprofile=tmp/coverage.out ./...
+      - go tool cover -func=tmp/coverage.out
+
+  coverage-html:
+    desc: Run tests and open an HTML, line-by-line coverage report in the browser
+    cmds:
+      - mkdir -p tmp
+      - go test -coverprofile=tmp/coverage.out ./...
+      - go tool cover -html=tmp/coverage.out
+
+  coverage-gaps:
+    desc: >-
+      List every function under internal/, worst-covered first — cmd/ is
+      deliberately excluded (entry points, not worth chasing coverage on).
+      awk pulls the percentage out as the last field regardless of how many
+      tabs `go tool cover -func` pads it with, since that padding varies per
+      line and breaks a naive tab-delimited sort.
+    cmds:
+      - mkdir -p tmp
+      - go test -coverprofile=tmp/coverage.out ./internal/...
+      - go tool cover -func=tmp/coverage.out | grep -v '^total:' | awk '{print $NF, $0}' | sort -n | cut -d' ' -f2-
+
   build:
     desc: Build all binaries locally
     cmds:

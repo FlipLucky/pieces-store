@@ -23,7 +23,7 @@ func (e *Editor) finishBufferMutationLocked(newOffset int) {
 	if e.highlighter != nil {
 		e.highlighter.Reparse(source)
 	}
-	if e.lspServer != nil {
+	if e.lspService.Active() {
 		e.notifyLSPDidChangeLocked(source)
 	}
 	if newOffset > e.table.Len() {
@@ -42,9 +42,9 @@ func (e *Editor) finishBufferMutationLocked(newOffset int) {
 // as an unresolved Move noun.
 func (e *Editor) RequestHover() {
 	e.mu.RLock()
-	server := e.lspServer
-	uri := e.lspURI
-	caps := e.lspCapabilities
+	server := e.lspService.Server
+	uri := e.lspService.URI
+	caps := e.lspService.Capabilities
 	at := e.cursor.ByteOffset
 	var source []byte
 	if server != nil {
@@ -67,7 +67,7 @@ func (e *Editor) RequestHover() {
 			text = result.Text()
 		}
 		return func(ed *Editor) {
-			if ed.lspServer != server {
+			if !ed.lspService.IsCurrent(server) {
 				return // a different buffer/server is active now — stale
 			}
 			ed.cursor.Hover = HoverState{Active: text != "", Text: text}
@@ -107,9 +107,9 @@ func (e *Editor) StartFormat() error {
 // happens on the async path and is reported via StatusMessage, matching
 // :LspInstall's own pattern. Caller must already hold e.mu.
 func (e *Editor) startFormatLocked() error {
-	server := e.lspServer
-	uri := e.lspURI
-	caps := e.lspCapabilities
+	server := e.lspService.Server
+	uri := e.lspService.URI
+	caps := e.lspService.Capabilities
 	baseSource := []byte(e.table.CombinePieces())
 
 	if server == nil {
@@ -127,7 +127,7 @@ func (e *Editor) startFormatLocked() error {
 			return func(ed *Editor) { ed.setStatusMessageLocked(fmt.Sprintf("format failed: %v", err)) }
 		}
 		return func(ed *Editor) {
-			if ed.lspServer != server {
+			if !ed.lspService.IsCurrent(server) {
 				return // stale — a different buffer/server is active now
 			}
 			if len(edits) == 0 {
@@ -189,9 +189,9 @@ func (e *Editor) applyTextEditsLocked(edits []lspclient.TextEdit, baseSource []b
 // see its call site in dispatch.go).
 func (e *Editor) maybeTriggerLSPCompletion(r rune) {
 	e.mu.Lock()
-	server := e.lspServer
-	uri := e.lspURI
-	caps := e.lspCapabilities
+	server := e.lspService.Server
+	uri := e.lspService.URI
+	caps := e.lspService.Capabilities
 	e.mu.Unlock()
 
 	if server == nil || caps.CompletionProvider == nil {
@@ -209,8 +209,7 @@ func (e *Editor) maybeTriggerLSPCompletion(r rune) {
 	}
 
 	e.mu.Lock()
-	e.lspCompletionGeneration++
-	generation := e.lspCompletionGeneration
+	generation := e.lspService.NextCompletionGeneration()
 	at := e.cursor.ByteOffset
 	source := []byte(e.table.CombinePieces())
 	e.mu.Unlock()
@@ -222,7 +221,7 @@ func (e *Editor) maybeTriggerLSPCompletion(r rune) {
 			return nil
 		}
 		return func(ed *Editor) {
-			if ed.lspServer != server || ed.lspCompletionGeneration != generation {
+			if !ed.lspService.IsCurrent(server) || ed.lspService.CompletionGeneration != generation {
 				return // superseded by a newer keystroke — discard
 			}
 			ed.cursor.LSPCompletion = LSPCompletionState{Active: true, Items: list.Items}

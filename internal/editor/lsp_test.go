@@ -13,23 +13,6 @@ import (
 	"github.com/fliplucky/pieces-store/platform"
 )
 
-// TestLanguageIDCoversEveryCuratedLanguage is a cheap, always-run guard
-// against silently shipping a new curated Language without a matching
-// LSP languageId.
-func TestLanguageIDCoversEveryCuratedLanguage(t *testing.T) {
-	all := []types.Language{
-		types.LanguageMarkdown, types.LanguageHTML, types.LanguageGo, types.LanguageJSON,
-		types.LanguageJavaScript, types.LanguageTypeScript, types.LanguageTSX, types.LanguageCSS,
-		types.LanguageSCSS, types.LanguagePHP, types.LanguageDart, types.LanguageC,
-		types.LanguageCPP, types.LanguageYAML, types.LanguageDockerfile,
-	}
-	for _, lang := range all {
-		if got := languageID(lang); got == "" || got == "plaintext" {
-			t.Errorf("languageID(%s) = %q, want a real LSP languageId", lang, got)
-		}
-	}
-}
-
 // TestRealDiagnosticsFlowIntoStyleSpans is the real end-to-end proof for
 // the whole LSP-diagnostics wiring: install a real gopls, open a real .go
 // file with an actual compile error through a live Editor, and confirm a
@@ -94,7 +77,7 @@ func TestRealDiagnosticsFlowIntoStyleSpans(t *testing.T) {
 	// not compounding it by leaking a process on every test run.
 	t.Cleanup(func() {
 		e.mu.Lock()
-		server := e.lspServer
+		server := e.lspService.Server
 		e.mu.Unlock()
 		if server != nil {
 			_ = server.Stop()
@@ -174,7 +157,7 @@ func TestRealHoverAutocompleteAndFormatEndToEnd(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		e.mu.Lock()
-		server := e.lspServer
+		server := e.lspService.Server
 		e.mu.Unlock()
 		if server != nil {
 			_ = server.Stop()
@@ -271,7 +254,7 @@ func waitForLSPReady(t *testing.T, e *Editor) {
 	waitFor(t, 30*time.Second, func() bool {
 		e.mu.RLock()
 		defer e.mu.RUnlock()
-		return e.lspServer != nil
+		return e.lspService.Server != nil
 	}, "LSP server never became ready; last status: "+e.StatusMessage())
 }
 

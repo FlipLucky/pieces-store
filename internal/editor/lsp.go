@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/fliplucky/pieces-store/internal/langdetect"
 	"github.com/fliplucky/pieces-store/internal/lspclient"
 	"github.com/fliplucky/pieces-store/internal/lspmanager"
 	"github.com/fliplucky/pieces-store/internal/offset"
@@ -19,46 +20,6 @@ import (
 	"github.com/fliplucky/pieces-store/internal/viewmanager"
 	"github.com/fliplucky/pieces-store/platform"
 )
-
-// languageID maps a types.Language to LSP's own languageId string
-// (textDocument/didOpen's "languageId" field) — real values per widely-used
-// LSP client convention (the same ids VS Code sends), not invented.
-func languageID(lang types.Language) string {
-	switch lang {
-	case types.LanguageGo:
-		return "go"
-	case types.LanguageJavaScript:
-		return "javascript"
-	case types.LanguageTypeScript:
-		return "typescript"
-	case types.LanguageTSX:
-		return "typescriptreact"
-	case types.LanguageHTML:
-		return "html"
-	case types.LanguageCSS:
-		return "css"
-	case types.LanguageSCSS:
-		return "scss"
-	case types.LanguageJSON:
-		return "json"
-	case types.LanguagePHP:
-		return "php"
-	case types.LanguageDart:
-		return "dart"
-	case types.LanguageC:
-		return "c"
-	case types.LanguageCPP:
-		return "cpp"
-	case types.LanguageYAML:
-		return "yaml"
-	case types.LanguageDockerfile:
-		return "dockerfile"
-	case types.LanguageMarkdown:
-		return "markdown"
-	default:
-		return "plaintext"
-	}
-}
 
 // ensureLSPForCurrentBufferLocked (re)targets the LSP layer at the table's
 // current FilePath — called everywhere setupHighlighterLocked already is
@@ -81,7 +42,7 @@ func languageID(lang types.Language) string {
 // Caller must already hold e.mu.
 func (e *Editor) ensureLSPForCurrentBufferLocked() {
 	filePath := e.table.FilePath
-	lang := types.DetectLanguage(filePath)
+	lang := langdetect.Detect(filePath)
 
 	if filePath == "" {
 		e.stopLSPServerLocked()
@@ -93,7 +54,7 @@ func (e *Editor) ensureLSPForCurrentBufferLocked() {
 		return
 	}
 
-	if e.lspServer != nil && e.lspLanguage == lang {
+	if e.lspService.Active() && e.lspService.Language == lang {
 		e.reopenLSPDocumentLocked(filePath)
 		return
 	}
@@ -107,14 +68,11 @@ func (e *Editor) ensureLSPForCurrentBufferLocked() {
 // bounded wait, see lspclient.Server.Stop) has no place blocking whatever
 // locked method triggered the switch.
 func (e *Editor) stopLSPServerLocked() {
-	if e.lspServer == nil {
+	if !e.lspService.Active() {
 		return
 	}
-	old := e.lspServer
-	e.lspServer = nil
-	e.lspLanguage = types.LanguagePlainText
-	e.lspURI = ""
-	e.lspCapabilities = lspclient.Capabilities{}
+	old := e.lspService.Server
+	e.lspService.Reset()
 	e.diagnostics = nil
 	e.cursor.Hover = HoverState{}
 	e.cursor.LSPCompletion = LSPCompletionState{}
@@ -126,14 +84,9 @@ func (e *Editor) stopLSPServerLocked() {
 // any), didOpen the new one, and reset diagnostics, which describe the
 // document that's no longer open.
 func (e *Editor) reopenLSPDocumentLocked(filePath string) {
-	server := e.lspServer
-	if e.lspURI != "" {
-		_ = server.DidClose(e.lspURI)
-	}
-	e.lspURI = "file://" + filePath
-	e.lspVersion = 1
+	e.lspService.Reopen(filePath)
 	e.diagnostics = nil
-	_ = server.DidOpen(e.lspURI, languageID(e.lspLanguage), e.lspVersion, e.table.CombinePieces())
+	_ = e.lspService.DidOpen(e.table.CombinePieces())
 }
 
 // startLSPAsyncLocked resolves entry's installed binary, spawns it, and
@@ -189,13 +142,9 @@ func (e *Editor) startLSPAsyncLocked(lang types.Language, entry lspmanager.Entry
 				go func() { _ = server.Stop() }()
 				return
 			}
-			ed.lspServer = server
-			ed.lspLanguage = lang
-			ed.lspURI = "file://" + filePath
-			ed.lspVersion = 1
-			ed.lspCapabilities = caps
+			ed.lspService.Start(server, lang, filePath, caps)
 			ed.diagnostics = nil
-			if err := server.DidOpen(ed.lspURI, languageID(lang), ed.lspVersion, ed.table.CombinePieces()); err != nil {
+			if err := ed.lspService.DidOpen(ed.table.CombinePieces()); err != nil {
 				ed.setStatusMessageLocked(fmt.Sprintf("%s: didOpen failed: %v", displayPackageName(entry), err))
 				return
 			}
@@ -243,7 +192,7 @@ func (e *Editor) watchLSPDiagnostics(server *lspclient.Server, ch <-chan lspclie
 		params := params
 		e.runAsync(func() asyncApply {
 			return func(ed *Editor) {
-				if ed.lspServer != server {
+				if !ed.lspService.IsCurrent(server) {
 					return // superseded by a newer server — stale, discard
 				}
 				ed.applyLSPDiagnosticsLocked(params)
@@ -257,7 +206,7 @@ func (e *Editor) watchLSPDiagnostics(server *lspclient.Server, ch <-chan lspclie
 // must already hold e.mu (it's always invoked from an asyncApply closure,
 // which the async-loop goroutine calls under lock).
 func (e *Editor) applyLSPDiagnosticsLocked(params lspclient.PublishDiagnosticsParams) {
-	if params.URI != e.lspURI {
+	if params.URI != e.lspService.URI {
 		return // diagnostics for a document that's no longer the active one
 	}
 	source := []byte(e.table.CombinePieces())
@@ -291,8 +240,7 @@ func (e *Editor) applyLSPDiagnosticsLocked(params lspclient.PublishDiagnosticsPa
 // (a version N notification can never race a version N+1 one sent from a
 // separate goroutine). Caller must already hold e.mu.
 func (e *Editor) notifyLSPDidChangeLocked(source []byte) {
-	e.lspVersion++
-	if err := e.lspServer.DidChange(e.lspURI, e.lspVersion, string(source)); err != nil {
+	if err := e.lspService.DidChange(source); err != nil {
 		e.setStatusMessageLocked(fmt.Sprintf("LSP didChange failed: %v", err))
 	}
 }

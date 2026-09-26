@@ -22,15 +22,27 @@ actual task until a dedicated pass like this one made it one. Grouped by
 theme, not urgency — none of these block anything:
 
 **State that should be bundled, not scattered:**
-- **Bundle the LSP-related `Editor` fields into one dedicated struct** —
-  `lspServer`, `lspLanguage`, `lspVersion`, `lspURI`, `lspCapabilities`,
-  `lspCompletionGeneration`, and arguably `diagnostics` are six-plus
-  separate fields on `Editor` today, all describing one cohesive concept
-  (the current LSP session for the open buffer). Beyond readability, this
-  is a real latent-bug fix: `stopLSPServerLocked` has to remember to reset
-  every one of them together today; a single struct makes "reset to zero
-  value" the only way to do it, rather than relying on nobody forgetting a
-  field. Put it in `lsp.go`, next to the logic that owns it.
+- ~~**Bundle the LSP-related `Editor` fields into one dedicated struct**~~
+  **Done 2026-09-25**, completed in two steps. First: `LspService`
+  bundled `LspServer`/`LspLanguage`/`LspVersion`/`LspURI`/`LspCapabilities`/
+  `LspCompletionGeneration` into one `Editor` field (`e.lspService`),
+  reconnected across `lsp.go`/`lspfeatures.go`/`dispatch.go` —
+  `stopLSPServerLocked`'s reset became one assignment instead of five.
+  Second, same day: gave it real methods (`Active`, `IsCurrent`, `Reset`,
+  `Start`, `Reopen`, `DidOpen`, `DidChange`, `NextCompletionGeneration`) so
+  `Editor` stopped reaching into its fields to decide anything itself —
+  then, since it turned out to have zero dependency on `Editor`'s own
+  state (only `lspclient`/`types`), moved it to its own package,
+  `internal/lspservice` (type renamed `Service` to avoid the
+  `lspservice.LspService` stutter, fields dropped their `Lsp` prefix
+  accordingly — `Server`/`Language`/`Version`/`URI`/`Capabilities`/
+  `CompletionGeneration`). Verified against a real, live `gopls` (not just
+  the fast unit suite) since this touched the async staleness-check call
+  sites directly — `TestRealDiagnosticsFlowIntoStyleSpans` and
+  `TestRealHoverAutocompleteAndFormatEndToEnd` both still pass end-to-end.
+  `diagnostics` deliberately stayed a separate `Editor` field rather than
+  joining the struct — it's keyed to `URI` but has its own independent
+  lifecycle (arrives async, well after the session starts).
 - **`SetMode`'s mode-transition cleanup belongs on `Cursor`, not `Editor`**
   — `Editor.SetMode` reaches into `Cursor`'s own fields (`CommandBuffer`,
   `Completion`, `LSPCompletion`) from the outside to decide what to clear
@@ -50,23 +62,19 @@ theme, not urgency — none of these block anything:
   its own `Cycle(direction)` method instead.
 
 **Logic that leaked into the wrong layer:**
-- **`types.DetectLanguage` shouldn't live in `internal/types`** — `types`
-  is meant to be the shared-kernel enum package (zero logic), and
-  extension-pattern-matching is real logic, not a type definition.
-  Deliberately *not* moving it into an LSP-specific package though: both
-  `internal/syntax` (tree-sitter) and the LSP stack need it equally, so an
-  LSP-owned home would be a backwards dependency for syntax highlighting.
-  Give it its own tiny zero-dependency leaf package instead (e.g.
-  `internal/langdetect`), the same shape `types` already has.
-- **Bracket/quote auto-pairing's decision logic** (`shouldPairQuoteHere`
-  and friends, `internal/editor/dispatch.go`) **and the multi-edit
-  apply-in-reverse-order algorithm** (`applyTextEditsLocked`,
-  `internal/editor/lspfeatures.go`) **are real, standalone algorithms
-  currently living inline in `Editor`** — neither needs `Editor`'s state to
-  reason about (a rune and its neighbors; a list of edits and a source
-  buffer), which is exactly the tell that they belong in their own
-  reusable, independently-testable place rather than mixed into
-  orchestration code.
+- ~~**`types.DetectLanguage` shouldn't live in `internal/types`**~~ **Done
+  2026-09-25** — moved to `internal/langdetect.Detect`, zero-dependency
+  leaf package, same shape `types` already has. `types` is back to pure
+  enums.
+- ~~**Bracket/quote auto-pairing's decision logic is a real, standalone
+  algorithm currently living inline in `Editor`**~~ **Done 2026-09-25** —
+  extracted to `internal/autopairs` as a pure function (`Decide(typed,
+  before, after rune) (Action, rune)`) taking just the three runes
+  involved, no buffer or `Editor` needed. `Editor` kept as the thin
+  imperative shell that reads the runes around the cursor and acts on the
+  decision. The multi-edit apply-in-reverse-order algorithm
+  (`applyTextEditsLocked`, `internal/editor/lspfeatures.go`) is still
+  open — same reasoning applies, just not done yet.
 - **`IndentStringAt`'s tab-formatting belongs in `internal/syntax`, not
   `Editor`** — `Editor.indentStringAtLocked` asks the highlighter for a
   depth (fine, that's orchestration) but then also decides *how* to render
@@ -92,21 +100,14 @@ theme, not urgency — none of these block anything:
   locking.
 
 **A real missing package, mirroring one that already exists:**
-- **Command-mode (`:...`) parsing deserves its own package, the same way
-  Normal-mode keystrokes got `internal/keyengine`** — `executeCommandLocked`
-  (`internal/editor/editor.go`) has grown to 9 cases (`w`/`e`/`q`/`q!`/`wq`/
-  `LspInstall`/`LspUninstall`/`LspStatus`/`Format`) as a flat
-  `strings.Fields` + switch, while Normal-mode input gets a real, separate
-  parser package. Explicitly *not* an extension of `keyengine` itself —
-  its `ExecutableCommand{Count,Verb,Modifier,Noun}` shape is built for
-  vim's verb/modifier/noun grammar specifically, and command-mode text
-  (space-separated tokens, closer to a shell line) doesn't fit that shape.
-  A new package (vim's own term for these is "Ex commands" — `internal/exmode`
-  or similar) should own parsing only (`Parse(raw string) Command{Name,
-  Args}`), the same "resolve, never act" discipline `keyengine` already
-  follows — `Editor`'s command dispatcher keeps doing what `execute()`
-  already does for `keyengine`'s output: take the resolved command, call
-  the right `Editor` method.
+- ~~**Command-mode (`:...`) parsing deserves its own package, the same way
+  Normal-mode keystrokes got `internal/keyengine`**~~ **Done 2026-09-25** —
+  `internal/exmode.Parse(raw string) Command{Name, Args}` now owns parsing
+  only, the same "resolve, never act" discipline `keyengine` already
+  follows. `executeCommandLocked` (`internal/editor/editor.go`) still owns
+  all 9 cases' actual dispatch logic — that part correctly stays in
+  `Editor`, since every case needs its own state (`e.table`, `e.mu`, the
+  LSP methods) directly.
 
 **Resolved since the last pass (2026-09-13), removed from this list**: the
 undo/redo model decision (settled — symmetric redo stack on

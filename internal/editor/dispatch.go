@@ -2,8 +2,8 @@ package editor
 
 import (
 	"fmt"
-	"unicode"
 
+	"github.com/fliplucky/pieces-store/internal/autopairs"
 	"github.com/fliplucky/pieces-store/internal/keyengine"
 	"github.com/fliplucky/pieces-store/internal/offset"
 	"github.com/fliplucky/pieces-store/internal/piecetable"
@@ -24,37 +24,6 @@ func (e *Editor) HandleKey(key string) bool {
 	default:
 		return e.handleNormalModeKey(key)
 	}
-}
-
-// bracketPairs is the auto-close table: typing a key on the left inserts
-// it plus its matching close, cursor landing between them. closingBrackets
-// is its inverse, used to detect "the user typed a close bracket that's
-// already sitting right here" (skip over it) and "cursor sits between a
-// matched open/close with nothing between" (collapse both on backspace).
-var bracketPairs = map[rune]rune{
-	'{': '}',
-	'(': ')',
-	'[': ']',
-}
-
-var closingBrackets = map[rune]rune{
-	'}': '{',
-	')': '(',
-	']': '[',
-}
-
-// quoteRunes is the auto-pair set for quote-style delimiters — unlike
-// bracketPairs, these use the *same* character for open and close, so
-// whether to pair at all needs a heuristic (see shouldPairQuoteHere):
-// only when neither neighboring character is a word character. Without
-// that, typing the apostrophe in a contraction like "don" + "t" would
-// insert a matching close right after it instead of just the one
-// character, and typing a quote right before an existing word would
-// split it in two.
-var quoteRunes = map[rune]bool{
-	'"':  true,
-	'\'': true,
-	'`':  true,
 }
 
 func (e *Editor) handleInsertModeKey(key string) bool {
@@ -92,64 +61,43 @@ func (e *Editor) handleInsertModeKey(key string) bool {
 	return true
 }
 
-// insertRuneWithAutoPairing implements auto-closing brackets and quotes.
-// Typing an opening bracket ({, (, [) inserts its matching close too, in
-// one edit, with the cursor landing between them ready to type the
-// contents. Typing a closing bracket that's already sitting right at the
-// cursor (because it was just auto-inserted) moves past it instead of
-// inserting a redundant second one — without that, auto-close actively
-// fights anyone who types their own closing bracket out of habit, which
-// is worse than not having the feature at all. Quotes (", ', `) get the
-// same skip-over treatment, plus shouldPairQuoteHere's neighbor check
-// before pairing at all, since a quote is its own closing character.
+// insertRuneWithAutoPairing implements auto-closing brackets and quotes —
+// the decision itself lives in internal/autopairs (a pure function: three
+// runes in, an Action out), this is just the imperative shell reading the
+// runes around the cursor and acting on whatever it decides. Typing an
+// opening bracket ({, (, [) inserts its matching close too, in one edit,
+// cursor landing between them ready to type the contents. Typing a closing
+// bracket (or quote) that's already sitting right at the cursor (because
+// it was just auto-inserted) moves past it instead of inserting a
+// redundant second one — without that, auto-close actively fights anyone
+// who types their own closing character out of habit, which is worse than
+// not having the feature at all.
 func (e *Editor) insertRuneWithAutoPairing(r rune) {
-	if closing, ok := bracketPairs[r]; ok {
+	before, after := e.runesAroundCursorLocked()
+	switch action, closing := autopairs.Decide(r, before, after); action {
+	case autopairs.InsertPair:
 		e.InsertText([]byte{byte(r), byte(closing)})
 		e.MoveCursorLeft()
-		return
-	}
-	if _, ok := closingBrackets[r]; ok && e.runeAtCursor() == r {
+	case autopairs.SkipOver:
 		e.MoveCursorRight()
-		return
+	default:
+		e.InsertText([]byte(string(r)))
 	}
-	if quoteRunes[r] {
-		if e.runeAtCursor() == r {
-			e.MoveCursorRight() // skip over an already-there matching quote
-			return
-		}
-		if e.shouldPairQuoteHere() {
-			e.InsertText([]byte{byte(r), byte(r)})
-			e.MoveCursorLeft()
-			return
-		}
-	}
-	e.InsertText([]byte(string(r)))
 }
 
-// shouldPairQuoteHere reports whether auto-pairing a quote at the cursor
-// makes sense — only when neither neighboring character is a word
-// character (letter, digit, or underscore). See quoteRunes's doc comment
-// for why: an apostrophe mid-word (a contraction or possessive) should
-// just insert itself, not open a new pair.
-func (e *Editor) shouldPairQuoteHere() bool {
+// runesAroundCursorLocked returns the runes immediately before and after
+// the cursor — 0 for either one that doesn't exist (start/end of buffer).
+func (e *Editor) runesAroundCursorLocked() (before, after rune) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	at := e.cursor.ByteOffset
-	if at < e.table.Len() {
-		if after, _ := e.table.GetRuneAt(at); isWordRune(after) {
-			return false
-		}
-	}
 	if at > 0 {
-		if before, _ := e.table.GetRuneAt(at - 1); isWordRune(before) {
-			return false
-		}
+		before, _ = e.table.GetRuneAt(at - 1)
 	}
-	return true
-}
-
-func isWordRune(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+	if at < e.table.Len() {
+		after, _ = e.table.GetRuneAt(at)
+	}
+	return before, after
 }
 
 // deleteBackwardWithPairCollapse is <BS>'s usual behavior, except when the
@@ -157,7 +105,8 @@ func isWordRune(r rune) bool {
 // cursor) — then it deletes both characters in one edit, collapsing the
 // pair, rather than leaving a dangling unmatched closer behind.
 func (e *Editor) deleteBackwardWithPairCollapse() {
-	if !e.cursorInsideEmptyPair() {
+	before, after := e.runesAroundCursorLocked()
+	if !autopairs.IsEmptyPair(before, after) {
 		e.DeleteText()
 		return
 	}
@@ -166,36 +115,6 @@ func (e *Editor) deleteBackwardWithPairCollapse() {
 	e.table.Delete(at-1, 2)
 	e.moveCursorToLocked(at-1, piecetable.Edit{Offset: at - 1, OldLength: 2})
 	e.mu.Unlock()
-}
-
-// cursorInsideEmptyPair reports whether the byte right before the cursor
-// and the byte right at it form a matched, empty open/close pair — either
-// a bracketPairs entry, or the same quote rune on both sides.
-func (e *Editor) cursorInsideEmptyPair() bool {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	at := e.cursor.ByteOffset
-	if at <= 0 || at >= e.table.Len() {
-		return false
-	}
-	before, _ := e.table.GetRuneAt(at - 1)
-	after, _ := e.table.GetRuneAt(at)
-	if want, ok := bracketPairs[before]; ok {
-		return after == want
-	}
-	return quoteRunes[before] && after == before
-}
-
-// runeAtCursor returns the rune sitting right at the cursor's byte
-// offset, or 0 (matching no real bracket/quote) at end of buffer.
-func (e *Editor) runeAtCursor() rune {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if e.cursor.ByteOffset >= e.table.Len() {
-		return 0
-	}
-	r, _ := e.table.GetRuneAt(e.cursor.ByteOffset)
-	return r
 }
 
 func (e *Editor) handleCommandModeKey(key string) bool {
@@ -447,7 +366,7 @@ func (e *Editor) moveCursorToLocked(newOffset int, edit piecetable.Edit) {
 	e.cursor.Update(newOffset, screenPos.Row, screenPos.Col)
 	e.dismissHoverLocked()
 
-	if edit != (piecetable.Edit{}) && (e.highlighter != nil || e.lspServer != nil) {
+	if edit != (piecetable.Edit{}) && (e.highlighter != nil || e.lspService.Active()) {
 		// CombinePieces materializes the whole buffer — a real,
 		// already-tracked cost for large files (same family as
 		// FindPieceAt's O(P) scan in BACKLOG.md), accepted for now since
@@ -460,7 +379,7 @@ func (e *Editor) moveCursorToLocked(newOffset int, edit piecetable.Edit) {
 		if e.highlighter != nil {
 			e.highlighter.Update(edit, source)
 		}
-		if e.lspServer != nil {
+		if e.lspService.Active() {
 			e.notifyLSPDidChangeLocked(source)
 		}
 	}

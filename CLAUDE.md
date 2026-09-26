@@ -253,6 +253,21 @@ code**, not a mandate to retrofit every existing violation immediately
 (judge existing cases — like tests reaching into unexported `Editor`
 fields — on their own merits).
 
+The mental picture worth keeping for this (the author's own, from building
+factory-automation games, and it holds surprisingly well): a **conveyor-belt
+splitter**. A value arrives labeled with its type; the splitter reads the
+label and routes it down the matching chute; nothing upstream ever needs to
+know how many chutes exist or where they physically lead. Adding a new chute
+later doesn't require rewiring the belt or touching anything already
+connected to it — the classic open/closed shape (open to a new case, closed
+against needing to change any existing caller to add it). Concretely,
+`internal/clipboard-register`'s `getRegister(RegisterType) *Register`
+*is* one of these splitters at a small scale: a caller supplies a type and a
+value and gets a result, with zero knowledge of which of five struct fields
+actually backs it. `Editor` is the same shape at a much larger scale,
+routing to `keyengine`/`offset`/`piecetable`/`lspservice` instead of struct
+fields — same splitter, different size.
+
 **Simple, not easy**: the keybinding foundation (`key_engine.go`) is meant to
 be genuinely hard to get right once, so that everything built on top of it
 stays simple. The concrete test for whether this has actually been achieved:
@@ -542,6 +557,22 @@ a few standalone algorithms (auto-pairing, multi-edit apply) out of
 giving command-mode (`:...`) parsing its own package the same way
 Normal-mode already got `internal/keyengine`. None of it is done yet —
 Part 3 should either wait for it or at least not make it harder.
+
+**Structural refactor in progress, 2026-09-25**: four of the review's items
+are done — `internal/langdetect` (extension→`types.Language` detection,
+out of `internal/types`), `internal/autopairs` (bracket/quote pairing
+decision logic, out of `Editor`), `internal/exmode` (command-mode parsing,
+mirroring `internal/keyengine`), and `internal/lspservice` (the LSP session
+type, first given its own methods so `Editor` stopped touching its fields
+directly, then moved to its own package once that made it dependency-free
+of `Editor`'s own state — see `BACKLOG.md` for the exact method list).
+Each followed the same discipline: real current code read first, extract,
+reconnect every call site, then `go build`/`vet`/`gofmt`/`test` clean
+before moving to the next one — and for `lspservice` specifically, also a
+real run against a live `gopls` (`LSPMANAGER_INTEGRATION=1`), since the
+staleness-check call sites it touched are exactly the kind of concurrency
+bug the fast unit suite wouldn't catch. Remaining items are tracked in
+`BACKLOG.md`, not repeated here.
 
 ## Module & toolchain
 

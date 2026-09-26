@@ -7,8 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fliplucky/pieces-store/internal/exmode"
 	"github.com/fliplucky/pieces-store/internal/keyengine"
-	"github.com/fliplucky/pieces-store/internal/lspclient"
+	"github.com/fliplucky/pieces-store/internal/langdetect"
+	"github.com/fliplucky/pieces-store/internal/lspservice"
 	"github.com/fliplucky/pieces-store/internal/offset"
 	"github.com/fliplucky/pieces-store/internal/piecetable"
 	"github.com/fliplucky/pieces-store/internal/syntax"
@@ -45,24 +47,16 @@ type Editor struct {
 	// lastCommandError, which is explicitly error-shaped.
 	asyncResults  chan asyncApply
 	statusMessage string
-	// lspServer/lspLanguage/lspVersion/lspURI/diagnostics back the LSP
-	// client wiring (lsp.go) — lspServer is nil whenever no server is
-	// installed/running for the current buffer's language (including
+	// lspService owns all LSP-session state for the current buffer (see
+	// lsp.go for the full lifecycle) — Active() is false whenever no server
+	// is installed/running for the current language (including
 	// LanguagePlainText or an unsaved buffer, which have no file URI to
-	// give a server anyway). See lsp.go's package doc comment for the
-	// full lifecycle.
-	lspServer       *lspclient.Server
-	lspLanguage     types.Language
-	lspVersion      int
-	lspURI          string
-	lspCapabilities lspclient.Capabilities
-	// lspCompletionGeneration guards against a slow completion response
-	// landing after a newer keystroke already fired another request (or
-	// dismissed the popup entirely) — each request captures the
-	// generation it was fired under and its result is discarded if that's
-	// no longer current by the time it arrives.
-	lspCompletionGeneration int
-	diagnostics             []viewmanager.DiagnosticSpan
+	// give a server anyway). Lives in its own package (internal/lspservice)
+	// since it has no dependency on Editor's own state — everything it needs
+	// to decide about itself (is it running, is a given server stale) lives
+	// on the type.
+	lspService  lspservice.Service
+	diagnostics []viewmanager.DiagnosticSpan
 }
 
 // ChangeEvent describes one change to the editor's state, delivered on
@@ -158,7 +152,7 @@ func NewEditorFromFile(filePath string) (*Editor, error) {
 // already existed. Caller must already hold e.mu, or be a constructor
 // where no other goroutine can see e yet.
 func (e *Editor) setupHighlighterLocked() {
-	lang := types.DetectLanguage(e.table.FilePath)
+	lang := langdetect.Detect(e.table.FilePath)
 	hl, ok := syntax.New(lang)
 	if !ok {
 		e.highlighter = nil
@@ -181,16 +175,14 @@ func (e *Editor) GetFilePath() string {
 }
 
 // Language returns the buffer's detected language, based on its file
-// path's extension (types.DetectLanguage) — LanguagePlainText for an
+// path's extension (langdetect.Detect) — LanguagePlainText for an
 // unsaved buffer or an unrecognized extension. Computed fresh each call
 // rather than cached, so it's always consistent with the current
 // FilePath with no staleness to manage across OpenFile/:e/SaveAs.
-// Nothing consumes this yet — it exists for a future syntax analyzer (or
-// LSP client) to know which grammar/languageId to use.
 func (e *Editor) Language() types.Language {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return types.DetectLanguage(e.table.FilePath)
+	return langdetect.Detect(e.table.FilePath)
 }
 
 func (e *Editor) SaveFile() error {
@@ -613,30 +605,25 @@ func (e *Editor) setStatusMessageLocked(msg string) {
 }
 
 func (e *Editor) executeCommandLocked(rawCmd string) error {
-	trimmed := strings.TrimSpace(rawCmd)
-	if strings.HasPrefix(trimmed, ":") {
-		trimmed = trimmed[1:]
-	}
-	parts := strings.Fields(trimmed)
-	if len(parts) == 0 {
+	cmd := exmode.Parse(rawCmd)
+	if cmd.Name == "" {
 		e.cursor.SetMode(types.ModeNormal)
 		e.cursor.CommandBuffer = ""
 		return nil
 	}
 
-	command := parts[0]
 	var err error
 
-	switch command {
+	switch cmd.Name {
 	case "w", "write":
-		if len(parts) > 1 {
-			err = e.table.SaveAs(parts[1])
+		if len(cmd.Args) > 0 {
+			err = e.table.SaveAs(cmd.Args[0])
 		} else {
 			err = e.table.Save()
 		}
 	case "e", "edit":
-		if len(parts) > 1 {
-			newTable, openErr := piecetable.NewPieceTableFromFile(parts[1])
+		if len(cmd.Args) > 0 {
+			newTable, openErr := piecetable.NewPieceTableFromFile(cmd.Args[0])
 			if openErr != nil {
 				err = openErr
 			} else {
@@ -666,9 +653,9 @@ func (e *Editor) executeCommandLocked(rawCmd string) error {
 			e.isQuitRequested = true
 		}
 	case "LspInstall":
-		err = e.startLspInstallLocked(parts[1:])
+		err = e.startLspInstallLocked(cmd.Args)
 	case "LspUninstall":
-		err = e.lspUninstallLocked(parts[1:])
+		err = e.lspUninstallLocked(cmd.Args)
 	case "LspStatus":
 		err = e.reportLspStatusLocked()
 	case "Format", "format":
