@@ -20,26 +20,43 @@ Two half-finished things are sitting in the working tree right now — this
 is exactly the "scaffold, then cold storage" pattern, caught early. Closing
 these out removes the "where was I" friction before anything else.
 
-- [ ] **T1 — Commit the pending diff.** `CLAUDE.md`'s "[orchestrator
-      doesn't play an instrument](CONCEPTS.md#the-orchestrator-doesnt-play-an-instrument)"
-      section and `editor.go`'s clipboard-register field + the
-      `SIMULATE`-ticker removal are already done, just uncommitted. (S, 🔧)
-- [ ] **T2 — Decide `internal/keyengine/insert_mode.go`'s fate.** It's an
-      orphaned stub — `InsertKeyEngine{}` and an unused `createMapping`
-      mapping only `<Esc>` — referenced nowhere. Reads like the start of
-      pulling Insert-mode key handling out of `dispatch.go`'s
-      `handleInsertModeKey` into its own file/type, mirroring how Normal
-      mode got `internal/keyengine`. Either finish that extraction or
-      delete the stub (and note the idea in `BACKLOG.md` instead) — just
-      don't leave it as silent dead code. (S, 🧠 — your call on direction)
+- [x] **T2 — Decide `internal/keyengine/insert_mode.go`'s fate.** Resolved
+      (2026-10-10, see `DESIGN_KEY_PIPELINE.md`): the stub's placement
+      doesn't fit — Insert mode has no verb/mod/noun grammar to validate,
+      so it was never going to finish as a `keyengine` type. Delete the
+      stub; what replaces it is the real work in **T18** below, not a
+      patch to this file.
 - [ ] **T3 — Decide the `clipboardRegister` field's fate the same way.**
       It's declared on `Editor` but never constructed (always nil) or read
       from any keybinding — same half-started shape. Either start wiring
-      real yank/paste now (T6–T8 below) or remove the field until that's
+      real yank/paste now (T10–T12 below) or remove the field until that's
       actually being built, so the struct doesn't advertise a capability
       that silently does nothing. (S, 🧠)
 
-## 1. Structural refactor — remainder
+## 1. The key-handling pipeline redesign — yours to drive
+
+Settled 2026-10-10 as a real design, not just a T2 patch — full reasoning
+in `DESIGN_KEY_PIPELINE.md`, promote to `CONCEPTS.md` once built. Short
+version: `Editor.HandleKey` becomes **Validate → Interpret → Apply**, three
+mode/`Target`-keyed handoffs, each one a
+[conveyor-belt splitter](CONCEPTS.md#decoupling-rule--conveyor-belt-splitter).
+This is bigger and more architectural than the rest of this file — treat it
+as its own multi-session arc, not a quick pickup.
+
+- [ ] **T18** — Delete `internal/keyengine/insert_mode.go`'s stub. (S, 🔧)
+- [ ] **T19** — Design + build `internal/interpreter` (working name): one
+      consumer package above both `keyengine` and `offset`, importing
+      both without either depending back. Start with
+      `interpreter/normal.go` — close to relocating `resolveMotion`/
+      `resolveRange` out of `dispatch.go` as-is. (L, 🧠)
+- [ ] **T20** — Design + build Insert mode's Validate + Interpret, per
+      `DESIGN_KEY_PIPELINE.md`'s open questions (the surrounding-rune
+      context interface in particular needs naming). (L, 🧠)
+- [ ] **T21** — Rewire `Editor.HandleKey` to the three-stage shape and
+      route `Apply` by `Target` (PieceTable vs. Editor). Depends on T19/T20
+      existing first. (M, 🧠)
+
+## 2. Structural refactor — remainder
 
 All mechanical reconnect work, same discipline as the four pieces already
 done (`langdetect`, `autopairs`, `exmode`, `lspservice` — see `BACKLOG.md`
@@ -53,7 +70,9 @@ and [the orchestrator doesn't play an instrument](CONCEPTS.md#the-orchestrator-d
       from outside. (M, 🔧)
 - [ ] **T5** — Give `CommandBuffer` its own type (`Append`/`Backspace`/
       `Clear`/`String`) instead of a raw string field poked at by `Editor`
-      methods. (M, 🔧)
+      methods. **Note:** this is also a soft prerequisite for Command
+      mode's eventual Validate stage in the pipeline redesign above — see
+      `DESIGN_KEY_PIPELINE.md`'s open questions — don't do it twice. (M, 🔧)
 - [ ] **T6** — Give `CompletionState`/`LSPCompletionState` their own
       `Cycle(direction)` method instead of `Editor` doing the wraparound
       math externally. (S, 🔧)
@@ -66,14 +85,17 @@ and [the orchestrator doesn't play an instrument](CONCEPTS.md#the-orchestrator-d
 - [ ] **T9** — Move `MoveCursorLeft/Right/Up/Down` (+ `*Locked` bodies) out
       of `editor.go` into `cursor.go`. Pure move, no logic change. (S, 🔧)
 
-## 2. Registers & real yank/paste — yours to drive
+## 3. Registers & real yank/paste — yours to drive
 
 `internal/clipboard-register` is your own design (built end-to-end last
 time without me writing the implementation) — wiring it into real
 keybindings is a natural continuation of that, not a new delegate-or-not
 question. Each of these is a new instance of
 [action+offset](CONCEPTS.md#actionoffset): a verb applying an action
-through an existing resolver.
+through an existing resolver. **Note:** once T19–T21 above land, these
+verbs are the first real content flowing through the new Interpret/Apply
+pipeline rather than the old direct-dispatch path — worth sequencing after
+the pipeline redesign, not before, so this isn't built twice.
 
 - [ ] **T10** — Wire `y` as a new verb reusing the existing noun resolvers
       (`yw`, `yiw`, `yy` for the whole line), storing the result via
@@ -87,7 +109,11 @@ through an existing resolver.
       `dd` then `p` round-trips the way real vim does. (S, 🔧 once T10/T11
       exist)
 
-## 3. Find/replace (`:s///`) — the next roadmap item per `CLAUDE.md`
+## 4. Find/replace (`:s///`) — the next roadmap item per `CLAUDE.md`
+
+Deliberately out of scope for the pipeline redesign above — `:s///` is the
+one Command-mode feature that will eventually fit Target+Action, but
+nothing here needs the redesign to land first.
 
 - [ ] **T13** — Design `:s/pattern/replacement/flags` parsing as a new
       `exmode` command shape. (M, ❓ — approachable either way; regex edge
@@ -97,7 +123,7 @@ through an existing resolver.
       the staged approach `CLAUDE.md` already describes for this feature.
       (S, 🤖, depends on T13/T14)
 
-## 4. Small, self-contained bug fixes (good solo confidence-builders)
+## 5. Small, self-contained bug fixes (good solo confidence-builders)
 
 - [ ] **T16** — Fix `piecetable.GetRuneAt`/`FindPieceAt` bypassing their
       own mutex — a real, self-contained concurrency bug, good for
@@ -111,7 +137,8 @@ through an existing resolver.
 - **Visual mode** — real design work (operators act directly on a
   selection, no following noun — a genuinely different shape from
   Normal's verb+noun grammar). Flagged previously as your carve-out to
-  design/drive, not a default delegate.
+  design/drive, not a default delegate. Its `StoreSelection` Target+Action
+  (see `DESIGN_KEY_PIPELINE.md`) is now at least sketched, not designed.
 - Search, macros, marks, splits/multi-buffer, folding, autocommands — see
   `VIM_ACTION_CHECKLIST.md` and `IDE_FEATURE_CHECKLIST.md` for the full
   unprioritized inventory; `FEATURES.md`'s Stage 3+ for sequencing.
