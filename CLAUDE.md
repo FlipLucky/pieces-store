@@ -591,6 +591,51 @@ staleness-check call sites it touched are exactly the kind of concurrency
 bug the fast unit suite wouldn't catch. Remaining items are tracked in
 `BACKLOG.md`, not repeated here.
 
+**Resuming after a real gap, and new project-tracking docs, 2026-10-10**:
+returning to the structural refactor above after about two weeks away, the
+working tree had two half-finished things sitting in it —
+`internal/keyengine/insert_mode.go` (an orphaned stub, `InsertKeyEngine{}`
+with an unused `createMapping` mapping only `<Esc>`) and a `clipboardRegister`
+field on `Editor` declared but never constructed or wired to any
+keybinding. Rather than just clearing those two and moving on, the session
+produced two new standing project docs meant to prevent exactly this kind
+of stall in the future: `ATOMIC_TASKS.md` (an ordered, ID'd — `T1`, `T2`,
+... — pick-up-anytime task queue, distinct from `BACKLOG.md`'s unordered
+sidebar list) and `CONCEPTS.md` (a short-entry glossary of this project's
+own named principles — action+offset, the orchestrator-doesn't-play-an-
+instrument test, the decoupling rule/conveyor-belt splitter, simple-not-
+easy, dumb-front-ends — that tasks link into instead of re-explaining
+inline).
+
+Deciding `insert_mode.go`'s fate (`ATOMIC_TASKS.md`'s T2) turned into a
+real design conversation rather than a quick delete-or-finish call, since
+forcing Insert mode into Normal mode's verb/modifier/noun grammar is
+exactly what stalled it the first time — Insert mode has nothing to
+compose, it only reacts to whichever key arrived. The result is
+`DESIGN_KEY_PIPELINE.md`: a working design note (explicitly not finished,
+read its own Status section) proposing `Editor.HandleKey` become three
+sequential, mode/`Target`-keyed handoffs — **Validate** (is this
+keypress/sequence legal in the current mode's grammar — `keyengine.
+ProcessCommand` and `exmode.Parse` already do this today, Insert mode's
+version would be close to a no-op), **Interpret** (resolve the validated
+result into one or more `Target + Action` pairs — new as a named concept,
+but `resolveMotion`/`resolveRange` in `dispatch.go` already do a fragment
+of this for Normal mode and already take `offset.Document` instead of
+`*Editor`), and **Apply** (route the resolved pair(s) to whichever
+subsystem acts — the piece table, or `Editor`/`Cursor` state). `Target:
+PieceTable` generalizes action+offset itself to cover the Interpret step's
+output explicitly; `Target: Editor` covers mode changes, cursor moves, and
+(once Visual mode exists) selection storage — one target, several Action
+variants, not three separate kinds. The new code's planned home is
+`internal/interpreter`, a package sitting *above* both `keyengine` and
+`offset` so neither has to start depending on the other, preserving the
+zero-dependency-sibling property `CLAUDE.md` already documents for both.
+Command mode is deliberately almost entirely out of scope for this
+redesign — `:w`/`:q`/`:e` don't need to fit it (genuine side effects, not
+Target+Action), only a future `:s///` would. None of this is built yet;
+`ATOMIC_TASKS.md`'s T18–T21 track the actual implementation as its own
+multi-session arc, separate from the smaller mechanical refactor items.
+
 ## Module & toolchain
 
 - Module: `github.com/fliplucky/pieces-store`
