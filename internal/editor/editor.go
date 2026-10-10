@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
 	"github.com/fliplucky/pieces-store/internal/exmode"
 	"github.com/fliplucky/pieces-store/internal/keyengine"
 	"github.com/fliplucky/pieces-store/internal/langdetect"
@@ -19,12 +20,13 @@ import (
 )
 
 type Editor struct {
-	mu             sync.RWMutex
-	table          *piecetable.Table
-	virtualGrid    *viewmanager.VirtualGrid
-	cursor         *Cursor
-	commandContext *keyengine.CommandContext
-	pendingReplace bool
+	mu                sync.RWMutex
+	table             *piecetable.Table
+	virtualGrid       *viewmanager.VirtualGrid
+	cursor            *Cursor
+	commandContext    *keyengine.CommandContext
+	pendingReplace    bool
+	clipboardRegister *clipboardregister.ClipboardRegister
 	// completionLineHead is the command buffer content before the token a
 	// completion cycle is replacing — only meaningful while
 	// cursor.Completion.Active. Kept off Cursor itself since it's pure
@@ -86,43 +88,6 @@ func NewEditor(initialText string) *Editor {
 		change:         make(chan ChangeEvent, 1),
 	}
 	ed.startAsyncLoop()
-
-	// Ticker simulation - only starts if SIMULATE=true is set in the environment
-	if os.Getenv("SIMULATE") == "true" {
-		go func() {
-			chars := []byte(" Typing simulation active! Now powered by the real Piece Table under the hood.")
-			idx := 0
-			ticker := time.NewTicker(500 * time.Millisecond)
-			defer ticker.Stop()
-
-			for range ticker.C {
-				ed.mu.Lock()
-				var edit piecetable.Edit
-				if idx >= len(chars) {
-					// Reset to initial text when simulation reaches the end
-					// — a whole-buffer replacement, not an incremental
-					// edit, so no delta to report (zero value).
-					ed.table = piecetable.NewPieceTable([]byte(initialText))
-					ed.cursor.Update(0, 0, 0)
-					idx = 0
-				} else {
-					// Calculate total length and insert the character at the end of the buffer
-					insertOffset := ed.table.Len()
-					ed.table.Insert(insertOffset, []byte{chars[idx]})
-					idx++
-
-					// Update cursor position to the end of the text
-					newOffset := ed.table.Len()
-					gridPos := offset.ByteOffsetToPosition(ed.table, newOffset)
-					screenPos := ed.virtualGrid.GetScreenPosition(gridPos)
-					ed.cursor.Update(newOffset, screenPos.Row, screenPos.Col)
-					edit = piecetable.Edit{Offset: insertOffset, NewLength: 1}
-				}
-				ed.mu.Unlock()
-				ed.notifyChange(edit)
-			}
-		}()
-	}
 
 	return ed
 }

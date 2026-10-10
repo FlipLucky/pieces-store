@@ -243,6 +243,23 @@ Front ends (`gui-base`/Gio, `tui-base`/tview) are meant to be **dumb**: they
 render whatever text/state the editor exposes, capture raw keystrokes, and
 forward them to the editor — no editing logic belongs in a front end.
 
+**The orchestrator doesn't play an instrument** (2026-09-26): the concrete
+test for whether an `Editor` method is holding logic it shouldn't. A
+conductor cues the violins and the horns in the right order and knows when
+the piece is done — they don't pick up an instrument themselves, because
+that's not the job, and it's not what they're best positioned to do. An
+`Editor` method should read the same way: something from a front end comes
+in, it calls out to the packages that actually know how to do the work
+(`keyengine`/`offset`/`piecetable`/`internal/autopairs`/`lspservice`/
+whatever), and it updates its own state with the result. The moment a
+method's *own* body is making a decision — branching on a capability check,
+computing a value inline — rather than asking a package for the answer and
+reacting to it, that's the conductor reaching for a violin. `moveCursorToLocked`
+is a real, current example worth knowing before touching it again: its name
+says "move the cursor," but its body also dismisses the hover popup, feeds
+the tree-sitter highlighter, and syncs the LSP session inline — five jobs
+under a name that describes one of them.
+
 **Decoupling rule**: every component should have no direct knowledge of any
 other component — either it's a self-contained black box, or the
 relationship is mediated entirely through an interface. This is why, e.g.,
