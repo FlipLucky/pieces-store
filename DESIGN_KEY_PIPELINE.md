@@ -1,10 +1,12 @@
 # Design note: the key-handling pipeline
 
-**Status:** high-level shape settled; exact per-mode Go types not yet
-written. This is a working scratchpad, not a finished reference — once
-Normal and Insert's interpreters actually get built, promote the settled
-parts into `CONCEPTS.md` and delete or shrink this file. Don't treat
-anything here as "done," only as "decided in principle."
+**Status:** high-level shape settled, including the pattern it resembles;
+exact per-mode Go types still not written. This is a working scratchpad,
+not a finished reference — once Validator and Processor actually exist as
+code for Normal and Insert mode, promote the settled parts into
+`CONCEPTS.md` and shrink or delete this file. Names below (`Validator`,
+`Processor`, `Executor`, `KeySequence`, `Action`) are working names, not
+final — the shape is what's settled, not the words.
 
 ## Where this came from
 
@@ -13,8 +15,7 @@ real design tension, not procrastination: wanting Insert mode to feel
 predictable alongside Normal mode's verb/modifier/noun grammar, while
 Insert mode genuinely has nothing to compose — it just reacts to whichever
 key arrived. Forcing one mode's shape onto another is what actually halted
-progress, twice over the project's history (first the keybinding stub,
-then almost again at the interface-signature level before catching it).
+progress, twice over the project's history.
 
 ## The reframe that unstuck it
 
@@ -24,124 +25,243 @@ decision**. Already true in different shapes across this codebase:
 `internal/keyengine` (verb/mod/noun → `ExecutableCommand`), `internal/
 exmode.Parse` (raw string → `Command`), `internal/autopairs.Decide` (three
 runes → a pairing decision). Visual mode is already on record in
-`BACKLOG.md` as needing its own different shape too — an operator acting
-directly on a selection, no noun. Insert mode diverging from Normal's
-grammar isn't breaking the pattern, it's confirming it.
+`BACKLOG.md` as needing its own different shape too. Insert mode diverging
+from Normal's grammar isn't breaking the pattern, it's confirming it.
 
-## The pipeline: Validate → Interpret → Apply
+## The architecture: an orchestrator and three engines
 
-Three sequential stages. Each one is the same shape: a label is read, work
-is routed to the matching chute, nothing upstream needs to know what's
-inside the box — see [decoupling rule / conveyor-belt
-splitter](CONCEPTS.md#decoupling-rule--conveyor-belt-splitter). Applied
-three times in a row, once per handoff.
+Four roles, each with exactly one job:
 
-1. **Validate** (switch by mode) — is this keypress/sequence legal in the
-   current mode's grammar? Returns an opaque validated result, or "not
-   yet" (still composing) / "invalid."
-   - Normal: already real today — `keyengine.CommandContext.ProcessCommand`.
-   - Command: already real today — `exmode.Parse`, once a full line is ready.
-   - Insert: close to a no-op — almost every key is "valid"; mostly just
-     classifies (a literal rune vs. one of a handful of special keys).
-2. **Interpret** (switch by mode) — takes the validated result and resolves
-   it into one or more `Target + Action` pairs (below). New as a named
-   concept, but already half-exists: `resolveMotion`/`resolveRange` (free
-   functions in `internal/editor/dispatch.go`) already do this for Normal
-   mode today, and already take `offset.Document` instead of `*Editor` —
-   nearly ready to relocate as-is, not a rewrite.
-3. **Apply** (switch by `Target`) — takes the resolved pair(s) and routes
-   to whichever subsystem actually acts (piece table vs. editor/cursor
-   state).
+- **Orchestrator** (`Editor`) — "the communicator": reads, sends, reads,
+  sends. Holds all state (mode, cursor, buffer) and sequences calls to the
+  three engines below. Never decides anything itself — only routes and
+  reacts. This is the concrete, repeatable test for [the orchestrator
+  doesn't play an
+  instrument](CONCEPTS.md#the-orchestrator-doesnt-play-an-instrument):
+  holding state is fine, using that state to decide something is not.
+- **Validator** — domain is keypresses and the current mode, nothing
+  else. Holds pending-sequence state across calls (accumulates partial
+  input), and once a sequence is complete and legal for the current mode,
+  produces a `KeySequence` — a structured value *shaped appropriately for
+  the mode that produced it* (Normal's stays verb/modifier/noun-shaped;
+  Insert's might just be a bare rune), but **never carrying a `Mode` field
+  of its own**. Mode already did its job by the time the sequence is
+  built; it doesn't need to be stapled onto the result too.
+- **Processor** — domain is a `KeySequence` *plus* the mode (handed again,
+  explicitly, by the Orchestrator — never read off the `KeySequence`
+  itself). Produces one or more `Action`s: fully resolved, self-describing
+  units of work ("delete this range," "mode change: visual," "insert this
+  rune here"). An `Action` is deliberately **mode-blind** — by the time it
+  exists, mode has already been used to interpret the sequence and is no
+  longer needed.
+- **Executor** — domain is `Action`s only. Reads a dispatch
+  map/table keyed by what kind of `Action` it is, and calls the connected
+  method — "talks to other departments" (`piecetable`, `autopairs`,
+  `lspservice`, `clipboard-register`, cursor/mode mutation) to actually
+  perform it, then reports a result back. Never asks what mode produced
+  the Action, never decides anything beyond "which department handles
+  this."
 
-`Editor.HandleKey` becomes three near-identical blocks: call, check for a
-greenlight, relay. It holds state (current mode, cursor position) but
-never *uses* that state to decide anything — only to route. That's the
-concrete, repeatable test for [the orchestrator doesn't play an
-instrument](CONCEPTS.md#the-orchestrator-doesnt-play-an-instrument): state
-is fine to hold, logic is not fine to perform.
+**Topology: a hub, not a chain.** Nothing ever calls the next stage
+directly — Validator never hands anything to Processor, Processor never
+hands anything to Executor. Every handoff round-trips through the
+Orchestrator:
 
-## Target + Action
+```
+Orchestrator --keypress--> Validator --KeySequence (or nothing yet)--> Orchestrator
+Orchestrator --KeySequence + mode--> Processor --Action(s)--> Orchestrator
+Orchestrator --Action(s)--> Executor --result--> Orchestrator
+```
 
-- **Target: PieceTable** — Action = `Insert`/`Delete` over a `Range` (plus
-  content, for Insert). This *is* [action+offset](CONCEPTS.md#actionoffset),
-  reused rather than reinvented. Covers `dw`, a literal character insert,
-  and — eventually — `:s///`'s replacements.
-- **Target: Editor** — Action = `ChangeMode`, `MoveCursor`,
-  `StoreSelection` (for Visual mode), and anything similar. Everything
-  that mutates Editor/Cursor state but never touches the piece table.
-  `MoveCursor`, `ChangeMode`, and selection-storage are *not* three
-  separate kinds — they're the same target, different actions on it.
-- **Deliberately not modeled by Target+Action at all**: Command mode's
-  named subcommands (`:w`, `:q`, `:LspInstall`). Genuinely heterogeneous
-  side effects — `executeCommandLocked`'s existing per-command dispatch
-  correctly stays exactly as it is (`BACKLOG.md` already settled this, this
-  design doesn't reopen it).
+After the last hop, the Orchestrator updates its own state and tells the
+frontend — this part is not new design, it's already-existing code:
+`Editor.ChangeChan()`/`StatusMessage()`/`notifyChange` already do exactly
+this.
 
-Worked examples:
+**Where mode lives, precisely**: passed explicitly into Validator and into
+Processor, by the Orchestrator, fresh each time. Never embedded in
+`KeySequence` or `Action`. This is the data-level version of the same
+discipline the control-flow already follows — the *boundary* (who needs
+mode) is the stable guideline; the exact types carrying data across that
+boundary are free to keep iterating, the same way Normal mode's own tables
+have been rewritten multiple times without `Editor.HandleKey`'s shape
+moving.
 
-| Key(-sequence)     | Target             | Action |
-|--------------------|---------------------|--------|
-| `<Esc>`            | Editor              | ChangeMode(Normal) |
-| `diw`              | PieceTable          | Delete at resolved range |
-| `viw`              | Editor              | ChangeMode(Visual) + StoreSelection(range) |
-| `o`                | PieceTable + Editor | Insert(`\n`+indent) + MoveCursor + ChangeMode(Insert) |
-| `{` (auto-pair)    | PieceTable + Editor | Insert(`{`) + Insert(`}`) + MoveCursor |
+## What pattern this resembles
 
-A single keypress can need more than one Target+Action pair at once — the
-interpreter's output is a short *list*, not always exactly one pair.
+Checked against the obvious candidates, and neither fits whole — for
+specific, nameable reasons, not vague ones:
+
+- **MVC doesn't catch it**: MVC's Controller is one blob that both
+  interprets input *and* decides what to do with it — it doesn't split
+  "is this valid" from "what does it mean" from "make it happen." MVC also
+  doesn't forbid Model notifying View directly, so it doesn't enforce the
+  hub-only communication rule either.
+- **Handler/Service/Repo comes close but not directly**: the *roles*
+  genuinely line up (adapt input → decide → effect, same escalation as
+  Validator → Processor → Executor). What differs is the **topology**:
+  H/S/R is a straight chain, each layer calling the next directly. This
+  design is hub-routed — nothing calls the next stage, everything reports
+  back to the Orchestrator and gets handed forward by it. Same roles,
+  different wiring.
+- **The actual composition this maps onto**:
+  1. **Mediator** (GoF) — textbook match for the topology: a central
+     object encapsulates how components interact so they never reference
+     each other directly. That's the Orchestrator, literally, not an
+     analogy.
+  2. **Command** (GoF) — `Action` is a Command object: a fully
+     self-contained, already-decided unit of work handed to an invoker.
+     Executor reading a dispatch table keyed by Action-kind and calling
+     the connected method is a textbook Command-pattern invoker.
+  3. **Lexer → Parser → Interpreter** — the closest real structural
+     cousin. Validator is a lexer (raw input → validated tokens, partial
+     state held across reads). Processor is a parser/semantic analyzer
+     (tokens + grammar context → a resolved IR node — `Action` *is* an IR
+     node). Executor is the interpreter/VM back-end — and "a dispatch map
+     keyed by Action-kind" is literally how real bytecode interpreters
+     dispatch (CPython's eval loop, Lua's VM: a jump table keyed by
+     opcode). Not a coincidence; it's what every interpreter back-end
+     does.
+
+  No single textbook name covers the whole thing, but it isn't ad hoc:
+  it's a **Mediator-routed pipeline carrying Command-shaped payloads,
+  structured like a lexer/parser/interpreter pipeline**. Generalizes
+  beyond this project — anything that goes raw-input → validated →
+  decided → effected fits the same shape (a network protocol handler, a
+  game engine's input layer, arguably an HTTP request stack if its router
+  were made an explicit mediator instead of an implicit one).
+
+## Decoupled by shape, not by sender
+
+A property worth naming explicitly, not just implied by the hub topology
+above: Processor's actual contract is "give me a `KeySequence` and a
+mode" — it has no reference to Validator anywhere in its own code, and
+doesn't care whether a `KeySequence` came from Validator's multi-keystroke
+accumulation or from anywhere else able to produce the same shape. Same
+for Executor and `Action`. Working together today is a composition choice
+the Orchestrator makes, not something either side's code depends on.
+
+Not hypothetical for this project specifically:
+
+- **LSP-driven edits** (`:Format`'s applied edits today, a future
+  code-action/quick-fix tomorrow) never come from a keypress at all —
+  they arrive from a network response. Those are `Action`s from the
+  moment they're parsed, and could go straight to Executor, Validator and
+  Processor never involved. `applyTextEditsLocked` already does a version
+  of this ad hoc; this gives it a real, named place to live.
+- **The plugin/Lua surface `CLAUDE.md`'s Vision & direction already has in
+  mind** — a script calling "delete this range" is constructing an
+  `Action` directly. This *is* that decoupled black-box boundary,
+  concretely, not aspirationally.
+- **Testability, today, not just future-facing** — Processor can be
+  unit-tested with a hand-built `KeySequence`, no need to drive
+  Validator's whole multi-keystroke state machine first. Same for
+  Executor with a hand-built `Action`.
+
+**Why this is free in Go specifically, and the concrete type-design
+consequence**: Go interfaces are satisfied structurally — a type
+implements an interface by having the right methods, full stop, with no
+`implements` declaration and no import of wherever the interface is
+defined. Contrast PHP/Java/C# (nominal: a type must explicitly declare
+`implements SomeInterface`, which means importing/referencing that
+interface's defining package before it can produce a value accepted by
+it). TypeScript's object/interface typing is a closer cousin to Go here
+(structurally checked for plain shapes) — but its classes still commonly
+use explicit `implements` too, so the comparison isn't "Go uniquely has
+this," just "Go has it by default, everywhere, with no opt-in."
+
+Concrete type-design consequence, not just language trivia: `KeySequence`
+and `Action` should be **interfaces** (small method contracts), not
+shared concrete structs. If they were plain structs, every producer —
+Processor, a future LSP-edit adapter, a future Lua binding — would need to
+import that one struct's defining package just to construct a value of
+it, recreating exactly the centralized-dependency problem this design
+avoids everywhere else. As interfaces, each producer defines its *own*
+concrete type (a Normal-mode action, an LSP-edit action, whatever a Lua
+binding needs) satisfying the same small method set, with zero import of
+Executor's package or of each other. The one thing that *does* need a
+shared home is the dispatch key Executor switches on (an `ActionKind`-
+style enum) — that belongs in `internal/types`, the dependency-free shared
+kernel every other package is already allowed to agree on.
+
+**Guides rather than enforces — and precisely which part of that is real:**
+nothing in Go's type system stops a careless future edit from wiring
+Executor straight to Validator. That's the **pit of success** idea (the
+easy path and the correct path are the same path, so people follow the
+structure because deviating is more work, not because anything blocks it)
+— but it's worth being exact about which part of "guides, doesn't enforce"
+is actually true:
+
+- **Hard-enforced, by the compiler, not by discipline**: as long as
+  Validator/Processor/Executor never import each other's packages,
+  cross-station calls are *structurally impossible* — there's no import
+  path, so there's nothing to call even by accident. Same guarantee
+  `keyengine`/`offset`'s sibling independence already relies on.
+- **Soft, genuinely convention-only**: the Orchestrator calling the three
+  stages in the right order and not skipping one. `Editor` legitimately
+  has import access to all three, so nothing in the type system stops a
+  rushed edit from calling Executor right after Validator. This is the
+  one piece that actually depends on this file and `CONCEPTS.md` existing
+  and being read — the written guideline *is* the enforcement mechanism
+  for the one part the compiler can't check.
+
+**Future intent, not today's task**: there's a standing wish to eventually
+write a full, general-audience piece on this pattern — it's judged to
+generalize well beyond this project. Not started; noted here so the intent
+isn't lost, not acted on.
 
 ## Where the new code lives
 
-A new package, working name `internal/interpreter`, sitting *above* both
-`keyengine` and `offset`, importing both. This resolves a real dependency
-question rather than papering over it: `keyengine` and `offset` were
-deliberately built as zero-dependency siblings (`CLAUDE.md`), specifically
-so neither depends on the other. Making `keyengine` absorb the
-range-resolution step itself would give that up. A new consumer package
-above both changes neither — `keyengine` and `offset` stay exactly as they
-are today.
+A new package, working name `internal/interpreter` (Processor's home),
+sitting above both `keyengine` (Validator's current home for Normal mode)
+and `offset`, importing both without either depending back — preserves the
+zero-dependency-sibling property `CLAUDE.md` already documents for both.
 
-Likely one file per mode inside it (`interpreter/normal.go`,
-`interpreter/insert.go`), mirroring how `keyengine` is already split
-internally by mode (`keyengine.go` core + `normal_mode.go` +
-`visual_mode.go`).
+Executor is a genuine separate package too, not a file tucked inside
+`editor` — a real package gives a compiler-enforced guarantee it can never
+reach back into Editor's internals, which a same-package file can't. It
+can safely import `piecetable`/`autopairs`/`lspservice`/
+`clipboard-register` directly (all already live outside `editor`). The one
+wrinkle is `Cursor` (lives inside `editor` today): resolved the same way
+`viewmanager.Document`/`offset.Document` already resolve this exact shape
+— Executor declares its own narrow interface for whatever it needs from
+cursor/mode-state (`SetMode`, `StoreSelection`, etc.), `*editor.Cursor`
+satisfies it structurally, Editor passes `e.cursor` in. Executor never
+imports `editor`.
+
+`interpreter/normal.go` (Processor, Normal mode) is close to relocating
+`resolveMotion`/`resolveRange` out of `dispatch.go` as-is, not a rewrite —
+they already take `offset.Document` instead of `*Editor`.
 
 ## Scope boundary (deliberate, not an oversight)
 
 Command mode stays almost entirely out of this redesign for now. `:w`/
-`:q`/`:e` already work and don't need to fit this model — they're
-SideEffect, not Target+Action, and that's correct, not a gap. `:s///`,
-whenever it lands, is the one Command-mode feature that *would* fit
-(Target: PieceTable, N replace actions). Nothing about Command mode's
-broader surface (ranges, `:g/pattern/cmd`, `:normal`, `:sort`, and the rest
-of `VIM_ACTION_CHECKLIST.md`'s Ex-commands section) needs solving now —
-explicit choice to avoid a much bigger rabbit hole than this one.
+`:q`/`:e` already work and don't need to fit this model — genuine side
+effects, dispatched by `executeCommandLocked` exactly as today, untouched
+by any of the above. `:s///`, whenever it lands, is the one Command-mode
+feature that would fit (its Action is a sequence of replace operations).
+Nothing about Command mode's broader surface needs solving now.
 
 ## Open questions — not yet settled
 
-- Exact Go type(s) for Normal mode's and Insert mode's validated-result
-  values. Likely `any` + a type-assert inside the matching `Interpret`
-  branch — the same idiom already needed for `Executable` itself — but not
-  yet written down as real code.
-- Insert mode's interpreter needs read access to surrounding runes (for
-  auto-pairing decisions) without importing `Editor` directly. Likely a
-  small interface the Insert package declares for itself, satisfied by
-  whatever `Editor` passes at construction — the same move already made
-  for `viewmanager.Document` — but not yet named or written.
-- What replaces `internal/keyengine/insert_mode.go`'s current stub.
-  Almost certainly: delete it outright. Its placement (inside `keyengine`)
-  doesn't fit once Insert mode's actual shape is clear — there's no
-  verb/mod/noun grammar for it to validate.
-- `CommandBuffer` becoming its own type (already tracked as
-  `BACKLOG.md`/`ATOMIC_TASKS.md`'s T5) is effectively a *prerequisite* for
-  Command mode's eventual Validate stage, not an unrelated refactor item —
+- Exact method sets for the `KeySequence` and `Action` interfaces (now
+  settled as interfaces, not `any` + type-assert — see "Decoupled by shape,
+  not by sender" above) — what each actually needs to expose is still
+  unwritten for both Normal and Insert mode.
+- Insert mode's Processor needs read access to surrounding runes (for
+  auto-pairing decisions) without importing `Editor` directly — likely a
+  small interface it declares for itself, satisfied by whatever Editor
+  passes at construction, same move as above — not yet named.
+- The exact shape of Executor's dispatch map/table (`map[ActionKind]func(...)`
+  or something else) — conceptually settled, not yet written.
+- `CommandBuffer` becoming its own type (`BACKLOG.md`/`ATOMIC_TASKS.md`'s
+  T5) is a soft prerequisite for Command mode's eventual Validator stage —
   worth remembering when T5 comes up, so it isn't done twice.
 
 ## Status
 
-High-level shape — Validate → Interpret → Apply, Target+Action, mode/
-Target-keyed routing throughout — is settled. Per-mode concrete types are
-not. This file is the holding place until Normal and Insert's interpreters
-actually exist as code; at that point the settled parts belong in
-`CONCEPTS.md` instead, and this file should shrink to just the still-open
-questions or be deleted.
+High-level shape and the pattern it composes from are both settled.
+Per-mode concrete types are not. This file is the holding place until
+Normal and Insert's engines actually exist as code; at that point the
+settled parts belong in `CONCEPTS.md` instead, and this file should shrink
+to just the still-open questions or be deleted.

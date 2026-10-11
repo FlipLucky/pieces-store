@@ -2,10 +2,8 @@ package editor
 
 import (
 	"errors"
-	"os"
 	"strings"
 	"sync"
-	"time"
 
 	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
 	"github.com/fliplucky/pieces-store/internal/exmode"

@@ -43,7 +43,12 @@ mode/`Target`-keyed handoffs, each one a
 This is bigger and more architectural than the rest of this file — treat it
 as its own multi-session arc, not a quick pickup.
 
-- [ ] **T18** — Delete `internal/keyengine/insert_mode.go`'s stub. (S, 🔧)
+- [x] **T18** — Delete `internal/keyengine/insert_mode.go`'s stub. Done
+      2026-10-11; `go build`/`vet`/`test` all clean after. Incidentally
+      found and fixed a real, unrelated build break while verifying: the
+      first checkpoint commit (`b3121bc`) left `os`/`time` imported but
+      unused in `editor.go` after removing the old `SIMULATE` ticker —
+      `go build ./...` had been broken since then. (S, 🔧)
 - [ ] **T19** — Design + build `internal/interpreter` (working name): one
       consumer package above both `keyengine` and `offset`, importing
       both without either depending back. Start with
