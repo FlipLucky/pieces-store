@@ -246,8 +246,13 @@ Nothing about Command mode's broader surface needs solving now.
 
 - Exact method sets for the `KeySequence` and `Action` interfaces (now
   settled as interfaces, not `any` + type-assert — see "Decoupled by shape,
-  not by sender" above) — what each actually needs to expose is still
-  unwritten for both Normal and Insert mode.
+  not by sender" above) — **Normal mode's built, 2026-10-11** (`internal/
+  interpreter`'s `Action`, `internal/executor`'s payload-capability
+  interfaces `hasOffset`/`hasRange`/`hasCount`/`hasRune`/`hasBelow`); a
+  formal `KeySequence` interface was deliberately skipped for now (only
+  one producer — `*keyengine.ExecutableCommand` — exists so far, nothing
+  to unify over yet; `ProcessNormal` just takes the concrete type
+  directly). Still unwritten for Insert mode (T20).
 - Insert mode's Processor needs read access to surrounding runes (for
   auto-pairing decisions) without importing `Editor` directly — likely a
   small interface it declares for itself, satisfied by whatever Editor

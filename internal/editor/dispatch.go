@@ -4,7 +4,8 @@ import (
 	"fmt"
 
 	"github.com/fliplucky/pieces-store/internal/autopairs"
-	"github.com/fliplucky/pieces-store/internal/keyengine"
+	"github.com/fliplucky/pieces-store/internal/executor"
+	"github.com/fliplucky/pieces-store/internal/interpreter"
 	"github.com/fliplucky/pieces-store/internal/offset"
 	"github.com/fliplucky/pieces-store/internal/piecetable"
 	"github.com/fliplucky/pieces-store/internal/types"
@@ -146,12 +147,17 @@ func (e *Editor) handleNormalModeKey(key string) bool {
 	// "r" (Replace) needs the *next* raw keystroke as its argument rather
 	// than being looked up in the verb/modifier/noun tables — the same
 	// bounded, one-keystroke literal-capture primitive Insert/Command mode
-	// use, just scoped to exactly one key before returning to parsing.
+	// use, just scoped to exactly one key before returning to parsing. It
+	// bypasses keyengine/interpreter entirely (there's no sequence to
+	// validate here) and constructs the Action directly — see
+	// interpreter.ReplaceRuneAction's doc comment.
 	if e.pendingReplace {
 		e.pendingReplace = false
 		if key != "<Esc>" {
 			if runes := []rune(key); len(runes) == 1 {
-				e.replaceCurrentRune(runes[0])
+				e.mu.Lock()
+				e.dispatchLocked(interpreter.ReplaceRuneAction{R: runes[0]})
+				e.mu.Unlock()
 			}
 		}
 		return true
@@ -168,166 +174,93 @@ func (e *Editor) handleNormalModeKey(key string) bool {
 	if cmd == nil {
 		return true
 	}
-	e.execute(cmd)
+
+	// Resolution (interpreter.ProcessNormal, reading e.table/cursor state)
+	// and application (executor.Dispatch) are one atomic section, not two
+	// separately-locked steps — otherwise another goroutine (async LSP
+	// work, see async.go) could mutate the table in between, resolving a
+	// motion/range against state that's already stale by the time it's
+	// applied. This is the same reason executeMove/executeDelete used to
+	// hold e.mu for their whole resolve-then-apply body.
+	e.mu.Lock()
+	pos := interpreter.Position{ByteOffset: e.cursor.ByteOffset, Row: e.cursor.Row, Col: e.cursor.Col}
+	action := interpreter.ProcessNormal(cmd, e.table, pos)
+	e.dispatchLocked(action)
+	e.mu.Unlock()
 	return true
 }
 
-// execute applies a fully-resolved command from the key engine. This is the
-// "action" side of action+offset: it resolves whatever offset/range a
-// command's Modifier+Noun implies (via the offset package) and applies the
-// command's Verb to it.
-func (e *Editor) execute(cmd *keyengine.ExecutableCommand) {
-	count := cmd.Count
-	if count < 1 {
-		count = 1
-	}
-
-	switch cmd.Verb {
-	case keyengine.Move:
-		e.executeMove(cmd.Noun, count)
-	case keyengine.Delete:
-		e.executeDelete(cmd.Modifier, cmd.Noun)
-	case keyengine.Undo:
-		for i := 0; i < count; i++ {
-			if !e.Undo() {
-				break
-			}
-		}
-	case keyengine.Redo:
-		for i := 0; i < count; i++ {
-			if !e.Redo() {
-				break
-			}
-		}
-	case keyengine.Replace:
-		e.pendingReplace = true
-	case keyengine.EnterInsert:
-		e.SetMode(types.ModeInsert)
-	case keyengine.EnterCommand:
-		e.SetMode(types.ModeCommand)
-	case keyengine.OpenBelow:
-		e.openLine(true)
-	case keyengine.OpenAbove:
-		e.openLine(false)
-	case keyengine.Hover:
-		e.RequestHover()
-	}
-}
-
-// resolveMotion turns a Move command's noun into a target offset, given the
-// current offset to move from. ok is false for a noun this executor
-// doesn't (yet) know how to resolve — a no-op, not a crash, so a
-// keybinding the parser accepts but the executor hasn't implemented simply
-// does nothing rather than misbehaving.
-func resolveMotion(doc offset.Document, noun keyengine.KeyActionName, from int) (target int, ok bool) {
-	switch noun {
-	case keyengine.Word:
-		return offset.MotionWordForward(doc, from), true
-	case keyengine.WordBackward:
-		return offset.MotionWordBackward(doc, from), true
-	case keyengine.WordEnd:
-		return offset.MotionWordEnd(doc, from), true
-	case keyengine.CharBackward:
-		return offset.MoveLeft(doc, from), true
-	case keyengine.CharForward:
-		return offset.MoveRight(doc, from), true
-	default:
-		return from, false
-	}
-}
-
-// resolveRange turns a Delete command's Modifier+Noun into a concrete
-// TextRange at the given offset. Same no-op-on-unknown contract as
-// resolveMotion.
-func resolveRange(doc offset.Document, modifier, noun keyengine.KeyActionName, at int) (offset.TextRange, bool) {
-	switch {
-	case modifier == keyengine.Inside && noun == keyengine.Word:
-		return offset.RangeInnerWord(doc, at), true
-	case modifier == keyengine.Around && noun == keyengine.Word:
-		return offset.RangeAroundWord(doc, at), true
-	case modifier == keyengine.Inside && noun == keyengine.Paragraph:
-		return offset.RangeInnerParagraph(doc, at), true
-	case noun == keyengine.LineMotion:
-		return offset.RangeLine(doc, at), true
-	default:
-		return offset.TextRange{}, false
-	}
-}
-
-func (e *Editor) executeMove(noun keyengine.KeyActionName, count int) {
+// Dispatch performs an already-resolved Action — the entry point for any
+// producer that isn't first resolving against live Editor state the way
+// interpreter.ProcessNormal does (e.g. a future LSP-driven edit, or a
+// plugin/Lua call constructing an Action directly — see
+// DESIGN_KEY_PIPELINE.md's "Decoupled by shape, not by sender"). Keypress-
+// driven Actions go through handleNormalModeKey's own locked block instead
+// of this, since resolving against e.table/cursor and applying the result
+// need to be one atomic section — see its comment.
+func (e *Editor) Dispatch(action executor.Action) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-
-	// j/k need the cursor's current Row/Col to preserve the intended
-	// column across lines of different lengths — not expressible as a
-	// pure function of "current byte offset" the way every other motion
-	// is, so they bypass resolveMotion's generic offset-accumulation loop
-	// entirely and go straight to the same Row/Col-aware logic
-	// MoveCursorUp/Down use.
-	switch noun {
-	case keyengine.LineUp:
-		for i := 0; i < count; i++ {
-			e.moveCursorUpLocked()
-		}
-		return
-	case keyengine.LineDown:
-		for i := 0; i < count; i++ {
-			e.moveCursorDownLocked()
-		}
-		return
-	}
-
-	target := e.cursor.ByteOffset
-	for i := 0; i < count; i++ {
-		next, ok := resolveMotion(e.table, noun, target)
-		if !ok {
-			return
-		}
-		target = next
-	}
-	e.moveCursorToLocked(target, piecetable.Edit{})
+	e.dispatchLocked(action)
 }
 
-func (e *Editor) executeDelete(modifier, noun keyengine.KeyActionName) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	rng, ok := resolveRange(e.table, modifier, noun, e.cursor.ByteOffset)
-	if !ok {
+// dispatchLocked is executor.Dispatch wrapped for callers that already
+// hold e.mu. Caller must already hold e.mu.
+func (e *Editor) dispatchLocked(action executor.Action) {
+	if action == nil {
 		return
 	}
+	executor.Dispatch(action, lockedEditorView{e})
+}
 
-	e.table.Delete(rng.Start, rng.Length)
+// lockedEditorView is internal/executor's Editor interface, satisfied by
+// Editor without ever being imported by internal/executor (mirrors
+// viewmanager.Document's precedent for the same problem). Every method
+// here assumes e.mu is already held by its caller (dispatchLocked) — they
+// call Editor's own already-existing *Locked bodies directly rather than
+// the public self-locking versions, which would deadlock re-entering the
+// same mutex (the same class of bug already caught once this session for
+// :Format/StartFormat).
+type lockedEditorView struct{ e *Editor }
 
+func (v lockedEditorView) MoveCursorToOffset(target int) {
+	v.e.moveCursorToLocked(target, piecetable.Edit{})
+}
+
+func (v lockedEditorView) DeleteRange(rng offset.TextRange) {
+	v.e.table.Delete(rng.Start, rng.Length)
 	newOffset := rng.Start
-	if newOffset > e.table.Len() {
-		newOffset = e.table.Len()
+	if newOffset > v.e.table.Len() {
+		newOffset = v.e.table.Len()
 	}
-	e.moveCursorToLocked(newOffset, piecetable.Edit{Offset: rng.Start, OldLength: rng.Length})
+	v.e.moveCursorToLocked(newOffset, piecetable.Edit{Offset: rng.Start, OldLength: rng.Length})
 }
 
-// replaceCurrentRune implements r's second keystroke: swap exactly the
-// rune under the cursor for the one just typed, leaving the cursor in
-// place.
-func (e *Editor) replaceCurrentRune(r rune) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (v lockedEditorView) Undo() bool { return v.e.undoLocked() }
+func (v lockedEditorView) Redo() bool { return v.e.redoLocked() }
 
-	at := e.cursor.ByteOffset
-	if at >= e.table.Len() {
+func (v lockedEditorView) SetMode(m types.Mode) { v.e.setModeLocked(m) }
+
+func (v lockedEditorView) BeginPendingReplace() { v.e.pendingReplace = true }
+
+// ReplaceRune implements r's second keystroke: swap exactly the rune
+// under the cursor for the one just typed, leaving the cursor in place.
+func (v lockedEditorView) ReplaceRune(r rune) {
+	at := v.e.cursor.ByteOffset
+	if at >= v.e.table.Len() {
 		return
 	}
-	_, width := e.table.GetRuneAt(at)
+	_, width := v.e.table.GetRuneAt(at)
 	if width <= 0 {
 		width = 1
 	}
-	e.table.Delete(at, width)
+	v.e.table.Delete(at, width)
 	newRune := []byte(string(r))
-	e.table.Insert(at, newRune)
-	e.moveCursorToLocked(at, piecetable.Edit{Offset: at, OldLength: width, NewLength: len(newRune)})
+	v.e.table.Insert(at, newRune)
+	v.e.moveCursorToLocked(at, piecetable.Edit{Offset: at, OldLength: width, NewLength: len(newRune)})
 }
 
-// openLine implements o (below) / O (above): insert a blank line adjacent
+// OpenLine implements o (below) / O (above): insert a blank line adjacent
 // to the current one, pre-indented to match the nesting at that point
 // (see Editor.IndentStringAt), and switch to Insert mode with the cursor
 // positioned after that indent.
@@ -339,21 +272,27 @@ func (e *Editor) replaceCurrentRune(r rune) {
 // not the blank row itself (confirmed the hard way: it silently pushed
 // typed text onto the wrong line). indent+"\n" makes indent the new row's
 // own content, correctly terminated by the fresh newline.
-func (e *Editor) openLine(below bool) {
-	e.mu.Lock()
-	rng := offset.RangeLine(e.table, e.cursor.ByteOffset)
+//
+// Folds the mode switch into the same locked section as the insert itself
+// (the original openLine unlocked and re-locked between the two, via the
+// public, self-locking SetMode) — a strict atomicity improvement, not a
+// behavior change: CommandBuffer/Completion/LSPCompletion are necessarily
+// already zero-value coming from Normal mode, so SetMode's cleanup for
+// those is a no-op here either way.
+func (v lockedEditorView) OpenLine(below bool) {
+	rng := offset.RangeLine(v.e.table, v.e.cursor.ByteOffset)
 	insertAt := rng.Start
 	if below {
 		insertAt = rng.Start + rng.Length
 	}
-	indent := e.indentStringAtLocked(insertAt)
+	indent := v.e.indentStringAtLocked(insertAt)
 	text := indent + "\n"
-	e.table.Insert(insertAt, []byte(text))
-	e.moveCursorToLocked(insertAt+len(indent), piecetable.Edit{Offset: insertAt, NewLength: len(text)})
-	e.mu.Unlock()
-
-	e.SetMode(types.ModeInsert)
+	v.e.table.Insert(insertAt, []byte(text))
+	v.e.moveCursorToLocked(insertAt+len(indent), piecetable.Edit{Offset: insertAt, NewLength: len(text)})
+	v.e.cursor.SetMode(types.ModeInsert)
 }
+
+func (v lockedEditorView) RequestHover() { v.e.requestHoverLocked() }
 
 // moveCursorToLocked updates the cursor to newOffset (recomputing its
 // screen position), feeds edit to the syntax highlighter (if any — see

@@ -296,10 +296,10 @@ func (e *Editor) MoveCursorUp() {
 	e.moveCursorUpLocked()
 }
 
-// moveCursorUpLocked is MoveCursorUp's body, split out so executeMove (in
-// dispatch.go, for keyengine's LineUp) can call it while already holding
-// e.mu — MoveCursorUp itself can't be called there, since it would try to
-// lock a mutex Go's sync.Mutex doesn't allow re-entering. Caller must
+// moveCursorUpLocked is MoveCursorUp's body, split out so callers that
+// already hold e.mu (e.g. Insert mode's arrow-key handling) can use it
+// instead — MoveCursorUp itself can't be called there, since it would try
+// to lock a mutex Go's sync.Mutex doesn't allow re-entering. Caller must
 // already hold e.mu.
 func (e *Editor) moveCursorUpLocked() {
 	if e.cursor.Row <= 0 {
@@ -399,6 +399,12 @@ func (e *Editor) DeleteText() {
 func (e *Editor) SetMode(m types.Mode) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.setModeLocked(m)
+}
+
+// setModeLocked is SetMode's body — see undoLocked's comment for why this
+// split exists. Caller must already hold e.mu.
+func (e *Editor) setModeLocked(m types.Mode) {
 	e.cursor.SetMode(m)
 	if m != types.ModeCommand {
 		e.cursor.CommandBuffer = ""
@@ -642,7 +648,15 @@ func (e *Editor) IsQuitRequested() bool {
 func (e *Editor) Undo() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.undoLocked()
+}
 
+// undoLocked is Undo's body, split out so lockedEditorView (dispatch.go,
+// the key-handling pipeline's Executor-facing adapter) can call it while
+// the pipeline's own caller already holds e.mu — Undo itself can't be
+// called there, same reentrant-mutex reasoning as moveCursorUpLocked.
+// Caller must already hold e.mu.
+func (e *Editor) undoLocked() bool {
 	edit, success := e.table.Undo()
 	if success {
 		newOffset := e.cursor.ByteOffset
@@ -659,7 +673,12 @@ func (e *Editor) Undo() bool {
 func (e *Editor) Redo() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.redoLocked()
+}
 
+// redoLocked is Redo's body — see undoLocked's comment for why this split
+// exists. Caller must already hold e.mu.
+func (e *Editor) redoLocked() bool {
 	edit, success := e.table.Redo()
 	if success {
 		newOffset := e.cursor.ByteOffset

@@ -49,17 +49,48 @@ as its own multi-session arc, not a quick pickup.
       first checkpoint commit (`b3121bc`) left `os`/`time` imported but
       unused in `editor.go` after removing the old `SIMULATE` ticker —
       `go build ./...` had been broken since then. (S, 🔧)
-- [ ] **T19** — Design + build `internal/interpreter` (working name): one
-      consumer package above both `keyengine` and `offset`, importing
-      both without either depending back. Start with
-      `interpreter/normal.go` — close to relocating `resolveMotion`/
-      `resolveRange` out of `dispatch.go` as-is. (L, 🧠)
+- [x] **T19** — `internal/interpreter` (Processor, Normal mode) and
+      `internal/executor` (Executor) built and wired in. Done 2026-10-11;
+      `go build`/`vet`/`test` all clean after, including both real
+      tagged `gui-local`/`tui-local` builds. Ported **every** Normal-mode
+      verb in one pass (Move, Delete, Undo, Redo, Replace, EnterInsert,
+      EnterCommand, OpenBelow/Above, Hover) — no dual-path left on the old
+      `execute()`, which is deleted outright along with
+      `executeMove`/`executeDelete`/`resolveMotion`/`resolveRange` (the
+      last two relocated into `interpreter`, not rewritten). `Action`/
+      `KeySequence` landed as interfaces per `DESIGN_KEY_PIPELINE.md`'s
+      "Decoupled by shape, not by sender" — `interpreter`'s concrete
+      Action types satisfy `executor.Action` structurally with zero
+      import between the two packages; `types.ActionKind` is the one
+      shared vocabulary item. Executor's `Editor` capability interface is
+      satisfied by a small adapter (`lockedEditorView` in dispatch.go)
+      whose methods call Editor's own existing `*Locked` bodies directly
+      — reuses already-correct, already-tested locking logic
+      (`undoLocked`/`redoLocked`/`setModeLocked`/`requestHoverLocked`,
+      newly split out the same way `moveCursorUpLocked` already was)
+      instead of Executor reimplementing it, and avoids the exact
+      reentrant-mutex class of bug caught once already this session for
+      `:Format`/`StartFormat`. New public `Editor.Dispatch(action)` is the
+      entry point for a future producer with nothing to resolve first
+      (an LSP-driven edit, a plugin call) — keypress-driven Actions go
+      through `handleNormalModeKey`'s own locked block instead, since
+      resolution (reading `e.table`/cursor) and application need to stay
+      one atomic section, not two. `OpenLine`'s mode switch got folded
+      into the same locked section as its text insert as an incidental
+      atomicity improvement (previously two separate critical sections).
+      All pre-existing dispatch/hjkl/undo-redo/replace/open-line tests
+      pass unchanged — confirms behavioral fidelity, not just compilation.
 - [ ] **T20** — Design + build Insert mode's Validate + Interpret, per
       `DESIGN_KEY_PIPELINE.md`'s open questions (the surrounding-rune
       context interface in particular needs naming). (L, 🧠)
-- [ ] **T21** — Rewire `Editor.HandleKey` to the three-stage shape and
-      route `Apply` by `Target` (PieceTable vs. Editor). Depends on T19/T20
-      existing first. (M, 🧠)
+- [x] **T21** — Rewire `Editor.HandleKey` to the three-stage shape and
+      route `Apply`/dispatch by Action kind. Done 2026-10-11 as a side
+      effect of doing T19 in full (no dual-path left to rewire later):
+      `handleNormalModeKey` already calls Validator (`keyengine`) →
+      Processor (`interpreter.ProcessNormal`) → Executor
+      (`executor.Dispatch`) for every verb. What's left for Command mode
+      stays explicitly out of scope per `DESIGN_KEY_PIPELINE.md`'s own
+      scope boundary.
 
 ## 2. Structural refactor — remainder
 

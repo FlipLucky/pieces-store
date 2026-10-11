@@ -48,6 +48,29 @@ const (
 	StyleDiagnosticWarning
 )
 
+// ActionKind is the one shared vocabulary item the key-handling pipeline's
+// Processor and Executor stages both agree on — the dispatch key Executor
+// switches on. Everything else about an Action (its payload, its concrete
+// Go type) is deliberately NOT shared: each producer (internal/interpreter
+// today; a future LSP-edit adapter or plugin surface tomorrow) defines its
+// own concrete type exposing Kind() plus whatever small payload-shaped
+// interfaces internal/executor needs, never importing executor to do so.
+// See DESIGN_KEY_PIPELINE.md's "Decoupled by shape, not by sender."
+type ActionKind int
+
+const (
+	ActionMove ActionKind = iota
+	ActionDelete
+	ActionUndo
+	ActionRedo
+	ActionBeginReplace
+	ActionReplaceRune
+	ActionEnterInsert
+	ActionEnterCommand
+	ActionOpenLine
+	ActionHover
+)
+
 // Language identifies which language a buffer's content is written in —
 // used to pick a treesitter grammar and an LSP languageId. Detected from
 // the file extension only (see internal/langdetect.Detect — deliberately

@@ -42,6 +42,16 @@ func (e *Editor) finishBufferMutationLocked(newOffset int) {
 // as an unresolved Move noun.
 func (e *Editor) RequestHover() {
 	e.mu.RLock()
+	defer e.mu.RUnlock()
+	e.requestHoverLocked()
+}
+
+// requestHoverLocked is RequestHover's body, split out so lockedEditorView
+// (dispatch.go, the key-handling pipeline's Executor-facing adapter) can
+// call it while the pipeline's own caller already holds e.mu — same
+// reentrant-mutex reasoning as undoLocked. Caller must already hold at
+// least a read lock on e.mu.
+func (e *Editor) requestHoverLocked() {
 	server := e.lspService.Server
 	uri := e.lspService.URI
 	caps := e.lspService.Capabilities
@@ -50,7 +60,6 @@ func (e *Editor) RequestHover() {
 	if server != nil {
 		source = []byte(e.table.CombinePieces())
 	}
-	e.mu.RUnlock()
 
 	if server == nil || !lspclient.Supported(caps.HoverProvider) {
 		return
