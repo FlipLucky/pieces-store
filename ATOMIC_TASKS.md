@@ -80,9 +80,33 @@ as its own multi-session arc, not a quick pickup.
       atomicity improvement (previously two separate critical sections).
       All pre-existing dispatch/hjkl/undo-redo/replace/open-line tests
       pass unchanged — confirms behavioral fidelity, not just compilation.
-- [ ] **T20** — Design + build Insert mode's Validate + Interpret, per
-      `DESIGN_KEY_PIPELINE.md`'s open questions (the surrounding-rune
-      context interface in particular needs naming). (L, 🧠)
+- [x] **T20** — Insert mode's Validator+Processor built as one function,
+      `interpreter.ProcessInsert` (`internal/interpreter/insert.go`). Done
+      2026-10-11; `go build`/`vet`/`test` clean, both tagged builds clean,
+      every pre-existing bracket/quote/backspace/indent/arrow test passes
+      unchanged. Validator and Processor are folded into one function —
+      Insert mode's grammar really is close to a no-op (confirmed, not
+      just predicted): there's no accumulation state worth a separate
+      stage. The surrounding-rune context interface the open question
+      asked for is `RuneContext{Before, After rune}` — a value snapshot,
+      same pattern as Normal mode's `Position` for j/k, not a live
+      interface onto Editor. Real reuse, not just parallel structure:
+      Insert's cursor motion and backspace-with-pair-collapse resolve
+      into the *same* `MoveAction`/`DeleteAction` types T19 already built
+      — Executor's handlers for those didn't need to change at all. Two
+      now-dead methods caused directly by this port were deleted rather
+      than left as unused API: `DismissLSPCompletion` (redundant with
+      `SetMode`'s existing LSPCompletion-clearing cleanup, verified
+      before cutting) and `LSPCompletionActive` (only caller was the code
+      just replaced; frontends already read `cursor.LSPCompletion.Active`
+      directly). `OpenLine`'s locked-adapter pattern repeated for two new
+      methods (`InsertTextAtCursor`, `InsertNewlineWithIndent`) — same
+      "Executor computes the indent itself, Processor never touches the
+      highlighter" reasoning. `maybeTriggerLSPCompletion` (kicks off an
+      async network request) deliberately stays outside the Action/
+      Executor pipeline — a genuine side effect, same scope boundary
+      `DESIGN_KEY_PIPELINE.md` already draws around Command mode's `:w`/
+      `:q`.
 - [x] **T21** — Rewire `Editor.HandleKey` to the three-stage shape and
       route `Apply`/dispatch by Action kind. Done 2026-10-11 as a side
       effect of doing T19 in full (no dual-path left to rewire later):
@@ -107,8 +131,9 @@ and [the orchestrator doesn't play an instrument](CONCEPTS.md#the-orchestrator-d
 - [ ] **T5** — Give `CommandBuffer` its own type (`Append`/`Backspace`/
       `Clear`/`String`) instead of a raw string field poked at by `Editor`
       methods. **Note:** this is also a soft prerequisite for Command
-      mode's eventual Validate stage in the pipeline redesign above — see
-      `DESIGN_KEY_PIPELINE.md`'s open questions — don't do it twice. (M, 🔧)
+      mode's eventual Validator stage, if/when `:s///` (Section 4 below)
+      needs one — see [Validator → Processor → Executor](CONCEPTS.md) —
+      don't do it twice. (M, 🔧)
 - [ ] **T6** — Give `CompletionState`/`LSPCompletionState` their own
       `Cycle(direction)` method instead of `Editor` doing the wraparound
       math externally. (S, 🔧)

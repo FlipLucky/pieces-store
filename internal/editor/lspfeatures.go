@@ -189,13 +189,15 @@ func (e *Editor) applyTextEditsLocked(edits []lspclient.TextEdit, baseSource []b
 
 // ---- Autocomplete ----
 
-// maybeTriggerLSPCompletionLocked fires an async completion request if r is
-// one of the active server's advertised trigger characters — called right
-// after a rune is inserted in Insert mode. A silent no-op otherwise (most
-// keystrokes, or no server/no completion support at all). Caller must
-// already hold e.mu (called from handleInsertModeKey's existing
-// already-unlocked call site the same way insertRuneWithAutoPairing is —
-// see its call site in dispatch.go).
+// maybeTriggerLSPCompletion fires an async completion request if r is one
+// of the active server's advertised trigger characters — called right
+// after a rune is inserted in Insert mode, unconditionally, regardless of
+// what the rune's auto-pairing decision did to the buffer (a genuine side
+// effect — kicking off network I/O — kept outside the Action/Executor
+// pipeline the same way Command mode's :w/:q stay outside it; see
+// handleInsertModeKey's call site in dispatch.go). A silent no-op
+// otherwise (most keystrokes, or no server/no completion support at all).
+// Self-locking — called without any outer lock held.
 func (e *Editor) maybeTriggerLSPCompletion(r rune) {
 	e.mu.Lock()
 	server := e.lspService.Server
@@ -245,21 +247,19 @@ func (e *Editor) maybeTriggerLSPCompletion(r rune) {
 func (e *Editor) CycleLSPCompletion(direction int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.cycleLSPCompletionLocked(direction)
+}
+
+// cycleLSPCompletionLocked is CycleLSPCompletion's body — see
+// undoLocked's comment for why this split exists. Caller must already
+// hold e.mu.
+func (e *Editor) cycleLSPCompletionLocked(direction int) {
 	if !e.cursor.LSPCompletion.Active {
 		return
 	}
 	n := len(e.cursor.LSPCompletion.Items)
 	e.cursor.LSPCompletion.Index = ((e.cursor.LSPCompletion.Index+direction)%n + n) % n
 	e.notifyChange(piecetable.Edit{})
-}
-
-// LSPCompletionActive reports whether a completion popup is currently
-// shown — handleInsertModeKey checks this to decide whether <Enter>
-// confirms a completion or does its normal auto-indent-newline thing.
-func (e *Editor) LSPCompletionActive() bool {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.cursor.LSPCompletion.Active
 }
 
 // ConfirmLSPCompletion applies the currently-highlighted candidate — a
@@ -269,7 +269,13 @@ func (e *Editor) LSPCompletionActive() bool {
 func (e *Editor) ConfirmLSPCompletion() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.confirmLSPCompletionLocked()
+}
 
+// confirmLSPCompletionLocked is ConfirmLSPCompletion's body — see
+// undoLocked's comment for why this split exists. Caller must already
+// hold e.mu.
+func (e *Editor) confirmLSPCompletionLocked() {
 	state := e.cursor.LSPCompletion
 	e.cursor.LSPCompletion = LSPCompletionState{}
 	if !state.Active || state.Index < 0 || state.Index >= len(state.Items) {
@@ -300,15 +306,4 @@ func (e *Editor) ConfirmLSPCompletion() {
 		e.table.Insert(start, []byte(newText))
 	}
 	e.finishBufferMutationLocked(start + len(newText))
-}
-
-// DismissLSPCompletion cancels an in-progress completion popup without
-// touching the buffer — <Esc> in Insert mode.
-func (e *Editor) DismissLSPCompletion() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.cursor.LSPCompletion.Active {
-		e.cursor.LSPCompletion = LSPCompletionState{}
-		e.notifyChange(piecetable.Edit{})
-	}
 }

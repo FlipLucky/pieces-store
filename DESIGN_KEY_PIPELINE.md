@@ -1,12 +1,23 @@
-# Design note: the key-handling pipeline
+# Design note: the key-handling pipeline (retired — built, 2026-10-11)
 
-**Status:** high-level shape settled, including the pattern it resembles;
-exact per-mode Go types still not written. This is a working scratchpad,
-not a finished reference — once Validator and Processor actually exist as
-code for Normal and Insert mode, promote the settled parts into
-`CONCEPTS.md` and shrink or delete this file. Names below (`Validator`,
-`Processor`, `Executor`, `KeySequence`, `Action`) are working names, not
-final — the shape is what's settled, not the words.
+**Status:** built for both Normal (T19) and Insert (T20) mode —
+`internal/interpreter` (Processor), `internal/executor` (Executor),
+`internal/keyengine` unchanged as Normal mode's Validator, folded into
+Processor for Insert mode. The settled vocabulary now lives in
+`CONCEPTS.md`'s [Validator → Processor →
+Executor](CONCEPTS.md#validator--processor--executor) and [Decoupled by
+shape, not by sender](CONCEPTS.md#decoupled-by-shape-not-by-sender)
+entries — read those first for the current, load-bearing version. This
+file is kept only for the design-conversation history below (the "what
+pattern this resembles" reasoning in particular isn't worth re-deriving),
+not as an active scratchpad — nothing below should be read as "not yet
+decided." The one item that was genuinely still open (Insert mode's
+surrounding-rune-context interface) resolved as `interpreter.RuneContext`
+— a value snapshot, same shape as Normal mode's `Position` for j/k.
+Names below (`Validator`, `Processor`, `Executor`, `KeySequence`,
+`Action`) matched 1:1 onto the real code, except `KeySequence`, which was
+deliberately never built as a formal interface — only one producer
+(`*keyengine.ExecutableCommand`) exists so far, nothing to unify over yet.
 
 ## Where this came from
 
@@ -242,31 +253,26 @@ by any of the above. `:s///`, whenever it lands, is the one Command-mode
 feature that would fit (its Action is a sequence of replace operations).
 Nothing about Command mode's broader surface needs solving now.
 
-## Open questions — not yet settled
+## Open questions — resolved, 2026-10-11
 
-- Exact method sets for the `KeySequence` and `Action` interfaces (now
-  settled as interfaces, not `any` + type-assert — see "Decoupled by shape,
-  not by sender" above) — **Normal mode's built, 2026-10-11** (`internal/
-  interpreter`'s `Action`, `internal/executor`'s payload-capability
-  interfaces `hasOffset`/`hasRange`/`hasCount`/`hasRune`/`hasBelow`); a
-  formal `KeySequence` interface was deliberately skipped for now (only
-  one producer — `*keyengine.ExecutableCommand` — exists so far, nothing
-  to unify over yet; `ProcessNormal` just takes the concrete type
-  directly). Still unwritten for Insert mode (T20).
-- Insert mode's Processor needs read access to surrounding runes (for
-  auto-pairing decisions) without importing `Editor` directly — likely a
-  small interface it declares for itself, satisfied by whatever Editor
-  passes at construction, same move as above — not yet named.
-- The exact shape of Executor's dispatch map/table (`map[ActionKind]func(...)`
-  or something else) — conceptually settled, not yet written.
-- `CommandBuffer` becoming its own type (`BACKLOG.md`/`ATOMIC_TASKS.md`'s
-  T5) is a soft prerequisite for Command mode's eventual Validator stage —
-  worth remembering when T5 comes up, so it isn't done twice.
+- `KeySequence`/`Action`'s exact method sets: built as interfaces for both
+  modes — `internal/interpreter`'s `Action`, `internal/executor`'s
+  payload-capability interfaces (`hasOffset`/`hasRange`/`hasCount`/
+  `hasRune`/`hasBelow`/`hasInsertion`/`hasDirection`). A formal
+  `KeySequence` interface was deliberately skipped — only one producer
+  (`*keyengine.ExecutableCommand`) exists so far, nothing to unify over
+  yet.
+- Insert mode's surrounding-rune-context need: `interpreter.RuneContext
+  {Before, After rune}` — a value snapshot, same pattern as `Position`.
+- Executor's dispatch shape: a type-switch on `types.ActionKind` plus
+  small optional-capability interfaces for payload extraction, not a
+  literal `map[ActionKind]func(...)` — functionally the same dispatch-
+  table idea, just idiomatic Go for "payload shape varies by kind."
+- `CommandBuffer` becoming its own type (T5) is still a soft prerequisite
+  for Command mode's eventual Validator, if/when `:s///` needs one — see
+  `ATOMIC_TASKS.md`'s T5.
 
 ## Status
 
-High-level shape and the pattern it composes from are both settled.
-Per-mode concrete types are not. This file is the holding place until
-Normal and Insert's engines actually exist as code; at that point the
-settled parts belong in `CONCEPTS.md` instead, and this file should shrink
-to just the still-open questions or be deleted.
+Built — see this file's top banner. Kept for the design-conversation
+history; `CONCEPTS.md` carries the load-bearing summary going forward.

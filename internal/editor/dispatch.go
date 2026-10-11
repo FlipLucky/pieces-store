@@ -3,7 +3,6 @@ package editor
 import (
 	"fmt"
 
-	"github.com/fliplucky/pieces-store/internal/autopairs"
 	"github.com/fliplucky/pieces-store/internal/executor"
 	"github.com/fliplucky/pieces-store/internal/interpreter"
 	"github.com/fliplucky/pieces-store/internal/offset"
@@ -27,95 +26,39 @@ func (e *Editor) HandleKey(key string) bool {
 	}
 }
 
+// handleInsertModeKey routes through the same Validator(folded into
+// Processor, since Insert mode's grammar is close to a no-op) →
+// Executor pipeline as Normal mode — see interpreter.ProcessInsert.
+// Resolution (reading e.table/cursor state to decide what a keystroke
+// means) and application are one atomic section, same reasoning as
+// handleNormalModeKey: an auto-pairing decision made against stale
+// before/after runes would be wrong by the time it's applied.
 func (e *Editor) handleInsertModeKey(key string) bool {
-	switch key {
-	case "<Esc>":
-		e.DismissLSPCompletion()
-		e.SetMode(types.ModeNormal)
-	case "<BS>":
-		e.deleteBackwardWithPairCollapse()
-	case "<Enter>":
-		if e.LSPCompletionActive() {
-			e.ConfirmLSPCompletion()
-			break
-		}
-		indent := e.IndentStringAt(e.GetCursor().ByteOffset)
-		e.InsertText([]byte("\n" + indent))
-	case "<C-n>":
-		e.CycleLSPCompletion(1)
-	case "<C-p>":
-		e.CycleLSPCompletion(-1)
-	case "<Left>":
-		e.MoveCursorLeft()
-	case "<Right>":
-		e.MoveCursorRight()
-	case "<Up>":
-		e.MoveCursorUp()
-	case "<Down>":
-		e.MoveCursorDown()
-	default:
-		if runes := []rune(key); len(runes) == 1 {
-			e.insertRuneWithAutoPairing(runes[0])
-			e.maybeTriggerLSPCompletion(runes[0])
-		}
+	e.mu.Lock()
+	pos := interpreter.Position{ByteOffset: e.cursor.ByteOffset, Row: e.cursor.Row, Col: e.cursor.Col}
+	var ctx interpreter.RuneContext
+	if pos.ByteOffset > 0 {
+		ctx.Before, _ = e.table.GetRuneAt(pos.ByteOffset - 1)
+	}
+	if pos.ByteOffset < e.table.Len() {
+		ctx.After, _ = e.table.GetRuneAt(pos.ByteOffset)
+	}
+	completionActive := e.cursor.LSPCompletion.Active
+	action := interpreter.ProcessInsert(key, e.table, pos, ctx, completionActive)
+	e.dispatchLocked(action)
+	e.mu.Unlock()
+
+	// maybeTriggerLSPCompletion kicks off an async network request — a
+	// genuine side effect, not a buffer/cursor decision, so it stays
+	// outside the Action/Executor pipeline (the same scope boundary
+	// DESIGN_KEY_PIPELINE.md already draws around Command mode's :w/:q).
+	// Fires for every plain single-rune key, regardless of what the
+	// pairing decision above did to the buffer — matches the original,
+	// which called it unconditionally after every single-rune key.
+	if runes := []rune(key); len(runes) == 1 {
+		e.maybeTriggerLSPCompletion(runes[0])
 	}
 	return true
-}
-
-// insertRuneWithAutoPairing implements auto-closing brackets and quotes —
-// the decision itself lives in internal/autopairs (a pure function: three
-// runes in, an Action out), this is just the imperative shell reading the
-// runes around the cursor and acting on whatever it decides. Typing an
-// opening bracket ({, (, [) inserts its matching close too, in one edit,
-// cursor landing between them ready to type the contents. Typing a closing
-// bracket (or quote) that's already sitting right at the cursor (because
-// it was just auto-inserted) moves past it instead of inserting a
-// redundant second one — without that, auto-close actively fights anyone
-// who types their own closing character out of habit, which is worse than
-// not having the feature at all.
-func (e *Editor) insertRuneWithAutoPairing(r rune) {
-	before, after := e.runesAroundCursorLocked()
-	switch action, closing := autopairs.Decide(r, before, after); action {
-	case autopairs.InsertPair:
-		e.InsertText([]byte{byte(r), byte(closing)})
-		e.MoveCursorLeft()
-	case autopairs.SkipOver:
-		e.MoveCursorRight()
-	default:
-		e.InsertText([]byte(string(r)))
-	}
-}
-
-// runesAroundCursorLocked returns the runes immediately before and after
-// the cursor — 0 for either one that doesn't exist (start/end of buffer).
-func (e *Editor) runesAroundCursorLocked() (before, after rune) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	at := e.cursor.ByteOffset
-	if at > 0 {
-		before, _ = e.table.GetRuneAt(at - 1)
-	}
-	if at < e.table.Len() {
-		after, _ = e.table.GetRuneAt(at)
-	}
-	return before, after
-}
-
-// deleteBackwardWithPairCollapse is <BS>'s usual behavior, except when the
-// cursor sits inside an empty auto-closed pair ({|}, (|), [|], "|", | =
-// cursor) — then it deletes both characters in one edit, collapsing the
-// pair, rather than leaving a dangling unmatched closer behind.
-func (e *Editor) deleteBackwardWithPairCollapse() {
-	before, after := e.runesAroundCursorLocked()
-	if !autopairs.IsEmptyPair(before, after) {
-		e.DeleteText()
-		return
-	}
-	e.mu.Lock()
-	at := e.cursor.ByteOffset
-	e.table.Delete(at-1, 2)
-	e.moveCursorToLocked(at-1, piecetable.Edit{Offset: at - 1, OldLength: 2})
-	e.mu.Unlock()
 }
 
 func (e *Editor) handleCommandModeKey(key string) bool {
@@ -293,6 +236,34 @@ func (v lockedEditorView) OpenLine(below bool) {
 }
 
 func (v lockedEditorView) RequestHover() { v.e.requestHoverLocked() }
+
+// InsertTextAtCursor implements plain-rune and auto-pair insertion in
+// Insert mode: insert text at the cursor, then land the cursor
+// caretOffset bytes after the insertion point — normally len(text), but
+// less when text is an auto-closed pair (so the cursor sits between the
+// two characters, ready to type the contents).
+func (v lockedEditorView) InsertTextAtCursor(text string, caretOffset int) {
+	insertAt := v.e.cursor.ByteOffset
+	v.e.table.Insert(insertAt, []byte(text))
+	v.e.moveCursorToLocked(insertAt+caretOffset, piecetable.Edit{Offset: insertAt, NewLength: len(text)})
+}
+
+// InsertNewlineWithIndent implements <Enter> in Insert mode when no
+// completion popup is active: split the line, pre-indented to match the
+// nesting at the cursor (see Editor.IndentStringAt) — mirrors OpenLine's
+// reasoning for why Executor computes the indent itself rather than
+// Processor (it depends on the syntax highlighter, which lives on Editor,
+// not on anything ProcessInsert has access to).
+func (v lockedEditorView) InsertNewlineWithIndent() {
+	at := v.e.cursor.ByteOffset
+	indent := v.e.indentStringAtLocked(at)
+	text := "\n" + indent
+	v.e.table.Insert(at, []byte(text))
+	v.e.moveCursorToLocked(at+len(text), piecetable.Edit{Offset: at, NewLength: len(text)})
+}
+
+func (v lockedEditorView) ConfirmLSPCompletion()            { v.e.confirmLSPCompletionLocked() }
+func (v lockedEditorView) CycleLSPCompletion(direction int) { v.e.cycleLSPCompletionLocked(direction) }
 
 // moveCursorToLocked updates the cursor to newOffset (recomputing its
 // screen position), feeds edit to the syntax highlighter (if any — see

@@ -38,6 +38,15 @@ type Editor interface {
 	ReplaceRune(r rune)
 	OpenLine(below bool)
 	RequestHover()
+	InsertTextAtCursor(text string, caretOffset int)
+	InsertNewlineWithIndent()
+	// Named ...LSPCompletion, not the shorter CycleCompletion/
+	// ConfirmCompletion, to avoid colliding in spirit with Editor's own
+	// pre-existing CycleCompletion (Command mode's :e/:w path completion
+	// — an unrelated feature with its own state, cursor.Completion, not
+	// cursor.LSPCompletion).
+	ConfirmLSPCompletion()
+	CycleLSPCompletion(direction int)
 }
 
 // Small, optional-capability interfaces for pulling an Action's payload
@@ -49,9 +58,13 @@ type (
 	hasRange  interface {
 		Range() (offset.TextRange, bool)
 	}
-	hasCount interface{ Count() int }
-	hasRune  interface{ Rune() rune }
-	hasBelow interface{ Below() bool }
+	hasCount     interface{ Count() int }
+	hasRune      interface{ Rune() rune }
+	hasBelow     interface{ Below() bool }
+	hasInsertion interface {
+		Insertion() (text string, caretOffset int)
+	}
+	hasDirection interface{ Direction() int }
 )
 
 // Dispatch performs a, calling whichever of ed's methods its Kind maps to.
@@ -109,6 +122,21 @@ func Dispatch(a Action, ed Editor) {
 		}
 	case types.ActionHover:
 		ed.RequestHover()
+	case types.ActionInsertText:
+		if p, ok := a.(hasInsertion); ok {
+			text, caret := p.Insertion()
+			ed.InsertTextAtCursor(text, caret)
+		}
+	case types.ActionNewline:
+		ed.InsertNewlineWithIndent()
+	case types.ActionExitInsert:
+		ed.SetMode(types.ModeNormal)
+	case types.ActionConfirmCompletion:
+		ed.ConfirmLSPCompletion()
+	case types.ActionCycleCompletion:
+		if p, ok := a.(hasDirection); ok {
+			ed.CycleLSPCompletion(p.Direction())
+		}
 	}
 }
 

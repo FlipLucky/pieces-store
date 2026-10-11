@@ -46,6 +46,37 @@ execution path edited rather than just registered into the tables, the
 foundation hasn't reached "simple" yet.
 See: `CLAUDE.md`'s Design philosophy.
 
+### Validator → Processor → Executor
+`Editor.HandleKey`'s key-handling shape, replacing the old single
+`execute()` switch (built 2026-10-11, Normal mode first as T19, Insert
+mode same day as T20). Four roles, each with exactly one job, talking only
+through the Orchestrator (`Editor`) — a hub, not a chain: **Validator**
+(keypresses + mode in, a `KeySequence` out — `internal/keyengine` for
+Normal mode; folded into Processor for Insert mode, since its grammar is
+close to a no-op) → **Processor** (`KeySequence` + mode in, one or more
+`Action`s out — `internal/interpreter`; pure resolution, no mutation,
+no access to `*editor.Editor`) → **Executor** (`Action`s in, performs the
+work, reports a result — `internal/executor`; a dispatch table keyed by
+`types.ActionKind`). Resembles Mediator (the hub) + Command (`Action` as a
+self-contained unit of work) + a lexer/parser/interpreter pipeline more
+than any single textbook pattern — see `DESIGN_KEY_PIPELINE.md`'s history
+for the full reasoning trail if the short version here doesn't answer a
+specific question.
+
+### Decoupled by shape, not by sender
+`Action`/`KeySequence` are interfaces, not shared structs — each producer
+(`internal/interpreter` today; a future LSP-driven edit or plugin/Lua call
+tomorrow) defines its own concrete type satisfying the small method set
+Executor needs, with zero import of Executor's package. Free in Go
+specifically because interfaces are satisfied structurally (no
+`implements` declaration, no import of wherever the interface is defined)
+— the one shared vocabulary item is `types.ActionKind`, the dispatch key.
+Concretely proven, not just designed-for: Insert mode's cursor motion and
+backspace-with-pair-collapse resolve into the *same* `MoveAction`/
+`DeleteAction` concrete types Normal mode's `w`/`dw` already produce —
+Executor's handlers for those didn't need to change at all when Insert
+mode was added.
+
 ### Dumb front ends / Editor as spine
 `internal/editor.Editor` is the orchestrator — the backbone everything
 connects through, owning all state and performing actions from key input.

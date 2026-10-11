@@ -69,6 +69,11 @@ const (
 	ActionEnterCommand
 	ActionOpenLine
 	ActionHover
+	ActionInsertText
+	ActionNewline
+	ActionExitInsert
+	ActionConfirmCompletion
+	ActionCycleCompletion
 )
 
 // Language identifies which language a buffer's content is written in —
