@@ -1,6 +1,7 @@
 // Package interpreter is Processor's home in the Validator → Processor →
-// Executor key-handling pipeline (see DESIGN_KEY_PIPELINE.md and
-// CONCEPTS.md). It sits above both internal/keyengine (Validator's current
+// Executor key-handling pipeline (see docs/concepts/validator-processor-
+// executor.md and DESIGN_KEY_PIPELINE.md for the full history). It sits
+// above both internal/keyengine (Validator's current
 // home for Normal mode) and internal/offset, importing both without either
 // depending back — the same zero-dependency-sibling property those two
 // packages already preserve between each other.
@@ -121,6 +122,7 @@ type UndoAction struct{ RepeatCount int }
 func (a UndoAction) Kind() types.ActionKind { return types.ActionUndo }
 func (a UndoAction) Count() int             { return a.RepeatCount }
 
+// RedoAction mirrors UndoAction exactly, for <C-r> instead of u.
 type RedoAction struct{ RepeatCount int }
 
 func (a RedoAction) Kind() types.ActionKind { return types.ActionRedo }
@@ -167,9 +169,9 @@ func (a HoverAction) Kind() types.ActionKind { return types.ActionHover }
 // what p/P would currently paste, in — one or more fully-resolved Actions
 // out, applied by Executor in order (e.g. Change is "delete this range"
 // then "enter Insert mode"; Paste-after is "move past the cursor" then
-// "insert here" — see CONCEPTS.md's Validator → Processor → Executor entry
-// for why this is the Processor's intended output shape, not a special
-// case). Returns nil only for a Verb this function doesn't know about,
+// "insert here" — see docs/concepts/validator-processor-executor.md for
+// why this is the Processor's intended output shape, not a special case).
+// Returns nil only for a Verb this function doesn't know about,
 // which shouldn't happen for anything keyengine's own whitelist tables
 // actually produce.
 func ProcessNormal(cmd *keyengine.ExecutableCommand, doc offset.Document, at Position, clip PasteClipboard) []Action {

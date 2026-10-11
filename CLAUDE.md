@@ -605,7 +605,8 @@ sidebar list) and `CONCEPTS.md` (a short-entry glossary of this project's
 own named principles — action+offset, the orchestrator-doesn't-play-an-
 instrument test, the decoupling rule/conveyor-belt splitter, simple-not-
 easy, dumb-front-ends — that tasks link into instead of re-explaining
-inline).
+inline; absorbed 2026-10-11 into the wiki's Concepts section
+(`docs/concepts/`) — see "A browsable wiki, 2026-10-11" further down).
 
 Deciding `insert_mode.go`'s fate (`ATOMIC_TASKS.md`'s T2) turned into a
 real design conversation rather than a quick delete-or-finish call, since
@@ -649,9 +650,10 @@ is close to a no-op — confirmed, not just predicted); new
 `types.ActionKind`. `Action`/`KeySequence` landed as interfaces, not
 shared structs, specifically so a producer (today, `interpreter`; a future
 LSP-edit adapter or plugin surface) never needs to import Executor's
-package to construct one — see `CONCEPTS.md`'s **Validator → Processor →
-Executor** and **Decoupled by shape, not by sender** entries, which now
-carry the load-bearing summary; `DESIGN_KEY_PIPELINE.md` is retired to
+package to construct one — see the wiki's (`docs/concepts/`) **Validator →
+Processor → Executor** and **Decoupled by shape, not by sender** pages,
+which now carry the load-bearing summary; `DESIGN_KEY_PIPELINE.md` is
+retired to
 history-only status. `dispatch.go`'s old `execute()`/`executeMove`/
 `executeDelete` are gone outright — every Normal-mode verb and every
 Insert-mode keystroke ported through the new pipeline in one pass each,
@@ -664,6 +666,47 @@ added. All pre-existing tests (bracket/quote/indent/undo-redo/hjkl/
 dispatch) pass unchanged throughout, confirming behavior was preserved,
 not just that the code compiles; both tagged `gui-local`/`tui-local`
 builds verified clean after each step.
+
+**Real yank/delete/change/paste shipped via the clipboard register,
+2026-10-11** — `internal/clipboard-register` (the user's own design,
+previously declared but never wired) now backs real Normal-mode
+keybindings: `y`/`d`/`c` (`yiw`/`yy`/`diw`/`dd`/`ciw`/`cc`, the linewise
+forms reusing `keyengine`'s existing doubled-verb mechanism) and `p`/`P`,
+with `r` (Replace) deliberately kept out of the register pipeline (a real,
+tested guarantee, not an omission). `clipboardregister.Register` was
+widened from a bare `[]string` to `[]Entry{Value, Linewise}` — the
+`Linewise` flag is set by `interpreter.ProcessNormal` from
+`cmd.Noun == keyengine.LineMotion`, the same signal that already makes
+`dd`/`yy` linewise, so no new parsing was needed — letting `p`/`P` insert
+a whole-line yank/delete as a genuine new line instead of splicing it into
+whatever line the cursor sits on. One real edge case found and fixed along
+the way: pasting after a buffer's last line (no trailing `"\n"` of its
+own) needs a synthesized leading `"\n"` as a separator, or the two lines
+glue together.
+
+**A browsable wiki, 2026-10-11** — `docs/` is a new, additive
+[docsify](https://docsify.js.org/)-based static site (`task docs` to
+serve locally, zero build step), cross-linked by concept and by package —
+distinct from godoc (per-symbol reference) and from this file (the
+actively-edited current-state record, which stays authoritative when the
+two disagree). `CONCEPTS.md`'s glossary entries became the wiki's Concepts
+section (one page per entry instead of one shared file), and a page was
+added per internal package pulled out of this file's Architecture section
+below, each with its own "depends on"/"depended on by" links. `CONCEPTS.md`
+itself is deleted — every place that used to link into it (this file,
+`ATOMIC_TASKS.md`, `DESIGN_KEY_PIPELINE.md`, two Go package doc comments)
+now points into `docs/concepts/` instead. Prompted by a broader
+documentation pass that also surfaced and fixed a handful of small, real
+leftovers: a dead commented-out import in `cmd/api/main.go`, two stale
+references to the deleted `execute()`/`executeMove` in this file's own
+Architecture/Known-issues sections (leftover from before the pipeline
+redesign's own changelog entry was written), a stale `BACKLOG.md` line
+claiming `GetRange` still panics (fixed earlier, BACKLOG's copy just never
+caught up), and `offset.MotionFindCharForward` — a fully-implemented,
+tested `f{char}` motion primitive that was never wired into any
+`keyengine` table (flagged as `ATOMIC_TASKS.md`'s new T18b rather than
+unilaterally wiring it up or deleting it, since both are legitimate calls
+only the user should make).
 
 ## Module & toolchain
 
@@ -733,9 +776,11 @@ can end up in a dependency cycle with `editor` or with each other.
   tree-based auto-indent on `<Enter>` (see `internal/syntax` below).
   Normal (and eventually Visual) mode hands the
   key to `keyengine.CommandContext.ProcessCommand`, and once a sequence
-  resolves, `execute()` (also in `dispatch.go`) resolves the command's
-  offset/range via `internal/offset` and applies the verb via
-  `piecetable`/`Editor`. Also handles file I/O, vim-style command mode
+  resolves, `interpreter.ProcessNormal` resolves it into one or more
+  `Action`s (offset/range math via `internal/offset`) which
+  `executor.Dispatch` applies via `piecetable`/`Editor` — see the
+  Validator → Processor → Executor entry below. Also handles file I/O,
+  vim-style command mode
   (`:w`, `:e`, `:q`/`:q!`, `:wq`, and — added 2026-09-20 —
   `:LspInstall`/`:LspUninstall`/`:LspStatus`, all via `ExecuteCommand`), and
   `Undo`/`Redo`. This is "the point of contact for the gui or tui" per its
@@ -1024,8 +1069,9 @@ table entries at all in the rebuilt `internal/keyengine` (the original
 all in Normal mode was repeated `w`). Fixed 2026-09-19: `h`/`l` and their
 arrow-key equivalents resolve through the same generic `Move`-verb
 pipeline as `w`/`b`/`e` (new `CharBackward`/`CharForward` nouns); `j`/`k`
-are special-cased in `executeMove` to call `moveCursorUpLocked`/
-`moveCursorDownLocked` directly, since preserving the cursor's column
+are special-cased in `interpreter.resolveLineStep` (the pipeline
+redesign's home for what was originally `executeMove`, see Current
+phase's 2026-10-11 entry) directly, since preserving the cursor's column
 across differently-sized lines needs current Row/Col state, not just a
 byte offset the way every other motion works. Arrow keys also now move
 the cursor in Insert mode (handled directly in `handleInsertModeKey`,

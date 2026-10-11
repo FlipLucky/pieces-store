@@ -5,8 +5,9 @@ not ordered) and `VIM_ACTION_CHECKLIST.md`/`IDE_FEATURE_CHECKLIST.md` (full,
 deliberately unprioritized inventories for weekend reading), this file is
 the actual next few things to do, each sized to finish in one sitting.
 Each item has a stable ID — say "do T4" rather than re-describing it.
-Where an item leans on a named project principle, it links into
-`CONCEPTS.md` instead of re-explaining that principle inline. Check items
+Where an item leans on a named project principle, it links into the wiki's
+Concepts section (`docs/concepts/`) instead of re-explaining that
+principle inline. Check items
 off, reorder freely, delete finished sections, add new atomic items here
 as they come up instead of letting prose backlogs grow instead.
 
@@ -36,8 +37,8 @@ Settled 2026-10-10 as a real design, built 2026-10-11 (T18–T21, "module
 1"). Final shape: `Editor.HandleKey` routes through **Validator →
 Processor → Executor** (the names below solidified from the original
 Validate/Interpret/Apply framing as the design conversation continued) —
-see [Validator → Processor → Executor](CONCEPTS.md#validator--processor--executor)
-and [Decoupled by shape, not by sender](CONCEPTS.md#decoupled-by-shape-not-by-sender)
+see [Validator → Processor → Executor](docs/concepts/validator-processor-executor.md)
+and [Decoupled by shape, not by sender](docs/concepts/decoupled-by-shape.md)
 for the lasting summary; `DESIGN_KEY_PIPELINE.md` is retired to
 history-only status. Kept below for the record, not as a pending list.
 
@@ -120,8 +121,8 @@ All mechanical reconnect work, same discipline as the four pieces already
 done (`langdetect`, `autopairs`, `exmode`, `lspservice` — see `BACKLOG.md`
 for what "done" looked like each time). Every item here is the same
 underlying move: pulling logic out of `Editor` into the type that should
-own it — see [decoupling rule / conveyor-belt splitter](CONCEPTS.md#decoupling-rule--conveyor-belt-splitter)
-and [the orchestrator doesn't play an instrument](CONCEPTS.md#the-orchestrator-doesnt-play-an-instrument).
+own it — see [decoupling rule / conveyor-belt splitter](docs/concepts/decoupling-splitter.md)
+and [the orchestrator doesn't play an instrument](docs/concepts/orchestrator-instrument.md).
 
 - [ ] **T4** — Move `SetMode`'s mode-transition cleanup onto
       `Cursor.SetMode` instead of `Editor` reaching into `Cursor`'s fields
@@ -130,7 +131,7 @@ and [the orchestrator doesn't play an instrument](CONCEPTS.md#the-orchestrator-d
       `Clear`/`String`) instead of a raw string field poked at by `Editor`
       methods. **Note:** this is also a soft prerequisite for Command
       mode's eventual Validator stage, if/when `:s///` (Section 4 below)
-      needs one — see [Validator → Processor → Executor](CONCEPTS.md) —
+      needs one — see [Validator → Processor → Executor](docs/concepts/validator-processor-executor.md) —
       don't do it twice. (M, 🔧)
 - [ ] **T6** — Give `CompletionState`/`LSPCompletionState` their own
       `Cycle(direction)` method instead of `Editor` doing the wraparound
@@ -190,8 +191,9 @@ real `HandleKey` sequences.
   `DeleteAction`/`EnterInsertAction` types unchanged. First real case of
   `ProcessNormal`/`ProcessInsert` returning more than one `Action` — their
   signature widened from `Action` to `[]Action`, applied by Executor in
-  order, exactly the shape `CONCEPTS.md`'s **Validator → Processor →
-  Executor** entry already described as intended, not yet exercised.
+  order, exactly the shape the wiki's
+  [Validator → Processor → Executor](docs/concepts/validator-processor-executor.md)
+  entry already described as intended, not yet exercised.
 
 ## 4. Find/replace (`:s///`) — the next roadmap item per `CLAUDE.md`
 
@@ -217,6 +219,15 @@ nothing here needs the redesign to land first.
       `internal/interpreter/normal.go` — moved here from `dispatch.go`'s
       now-deleted `executeDelete` during T19). Mirrors the count-loop
       pattern `resolveMove` (same file) already uses for Move. (S, 🔧)
+- [ ] **T18b** — `offset.MotionFindCharForward` (`f{char}`'s motion math)
+      is fully implemented and unit-tested but was never wired into
+      `keyengine` — no `f`/`F` verb or direct exists in `normal_mode.go`,
+      found via a dead-code scan 2026-10-11. Looks like a primitive built
+      ahead of its keybinding, not a mistake. Decide: wire up `f`/`F` as a
+      real keybinding (the resolver's already done — this is mostly a
+      `normal_mode.go` table entry plus a `resolveMotion` case in
+      `interpreter/normal.go`), or delete it if `f`/`F` isn't wanted yet.
+      Not decided here — your call. (S, ❓)
 
 ## Longer horizon — browse, don't start yet
 

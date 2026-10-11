@@ -1,10 +1,10 @@
 // Package executor is Executor's home in the Validator → Processor →
-// Executor key-handling pipeline (see DESIGN_KEY_PIPELINE.md and
-// CONCEPTS.md). Its only job is dispatch: given an already-resolved
-// Action, decide which of Editor's capabilities to invoke. It never
-// resolves anything itself and never imports internal/interpreter —
-// Action's producer is irrelevant to it, only its shape is (see
-// "Decoupled by shape, not by sender" in the design doc).
+// Executor key-handling pipeline (see docs/concepts/validator-processor-
+// executor.md and DESIGN_KEY_PIPELINE.md for the full history). Its only
+// job is dispatch: given an already-resolved Action, decide which of
+// Editor's capabilities to invoke. It never resolves anything itself and
+// never imports internal/interpreter — Action's producer is irrelevant to
+// it, only its shape is (see docs/concepts/decoupled-by-shape.md).
 package executor
 
 import (

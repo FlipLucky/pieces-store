@@ -144,10 +144,12 @@ list, not a gap.
   outside `Editor`'s coarser lock. Not triggered today (single-goroutine
   usage per `Editor`), but a broken promise on a type that advertises
   thread safety via `sync.RWMutex`.
-- **`GetRange` panics on out-of-range/reversed input**; `Insert` with a
-  negative offset silently misplaces instead of erroring. No consistent
-  failure discipline across `Insert`/`Delete`/`GetRange`/`FindPieceAt`. Will
-  matter more once viewport work starts calling `GetRange` for real.
+- **`Insert` with a negative offset silently misplaces instead of
+  erroring** — no consistent failure discipline across
+  `Insert`/`Delete`/`FindPieceAt`. (`GetRange` itself was fixed — it now
+  clamps out-of-range/reversed input instead of panicking, see
+  `piecetable/reader.go`/`table_test.go`'s `TestGetRange` and CLAUDE.md's
+  Known Issues #3 — this bullet was stale against that fix.)
 - **No rune-boundary guard on `Insert`/`Delete`/`GetRange`** — a
   non-rune-aligned byte offset would silently corrupt UTF-8 text. Not
   currently reachable (all current callers stay rune-aligned via

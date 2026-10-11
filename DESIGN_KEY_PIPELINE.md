@@ -3,11 +3,11 @@
 **Status:** built for both Normal (T19) and Insert (T20) mode —
 `internal/interpreter` (Processor), `internal/executor` (Executor),
 `internal/keyengine` unchanged as Normal mode's Validator, folded into
-Processor for Insert mode. The settled vocabulary now lives in
-`CONCEPTS.md`'s [Validator → Processor →
-Executor](CONCEPTS.md#validator--processor--executor) and [Decoupled by
-shape, not by sender](CONCEPTS.md#decoupled-by-shape-not-by-sender)
-entries — read those first for the current, load-bearing version. This
+Processor for Insert mode. The settled vocabulary now lives in the wiki's
+(`docs/concepts/`) [Validator → Processor →
+Executor](docs/concepts/validator-processor-executor.md) and [Decoupled by
+shape, not by sender](docs/concepts/decoupled-by-shape.md)
+pages — read those first for the current, load-bearing version. This
 file is kept only for the design-conversation history below (the "what
 pattern this resembles" reasoning in particular isn't worth re-deriving),
 not as an active scratchpad — nothing below should be read as "not yet
@@ -48,7 +48,7 @@ Four roles, each with exactly one job:
   three engines below. Never decides anything itself — only routes and
   reacts. This is the concrete, repeatable test for [the orchestrator
   doesn't play an
-  instrument](CONCEPTS.md#the-orchestrator-doesnt-play-an-instrument):
+  instrument](docs/concepts/orchestrator-instrument.md):
   holding state is fine, using that state to decide something is not.
 - **Validator** — domain is keypresses and the current mode, nothing
   else. Holds pending-sequence state across calls (accumulates partial
@@ -212,8 +212,8 @@ is actually true:
   stages in the right order and not skipping one. `Editor` legitimately
   has import access to all three, so nothing in the type system stops a
   rushed edit from calling Executor right after Validator. This is the
-  one piece that actually depends on this file and `CONCEPTS.md` existing
-  and being read — the written guideline *is* the enforcement mechanism
+  one piece that actually depends on this file and the wiki's Concepts
+  pages existing and being read — the written guideline *is* the enforcement mechanism
   for the one part the compiler can't check.
 
 **Future intent, not today's task**: there's a standing wish to eventually
@@ -275,4 +275,5 @@ Nothing about Command mode's broader surface needs solving now.
 ## Status
 
 Built — see this file's top banner. Kept for the design-conversation
-history; `CONCEPTS.md` carries the load-bearing summary going forward.
+history; the wiki's Concepts pages (`docs/concepts/`) carry the
+load-bearing summary going forward.

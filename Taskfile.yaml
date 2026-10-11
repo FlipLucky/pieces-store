@@ -112,3 +112,8 @@ tasks:
     desc: Start the Dev/Engine service in Docker Compose
     cmds:
       - docker compose up --build dev
+
+  docs:
+    desc: Serve the docs/ wiki locally (no build step — plain markdown via docsify)
+    cmds:
+      - python3 -m http.server 3030 --directory docs

@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 
-	// guibase "github.com/fliplucky/pieces-store/internal/gui-base"
 	"github.com/fliplucky/pieces-store/internal/piecetable"
 )
 
