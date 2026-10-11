@@ -1046,6 +1046,41 @@ its own config (`.air.gui.toml`, `.air.tui.toml`, `.air.dev.toml`).
   `keymap`'s tests use a `MockEditor` implementing `EditorInterface`, and
   `viewmanager`'s tests use a small `ByteDocument` implementing `Document`.
 
+## Documentation conventions
+
+Three documentation layers, each with a distinct job (see `docs/README.md`
+for the fuller breakdown): **godoc** (per-symbol reference, `go doc`/editor
+tooling), **this file + `BACKLOG.md`/`ATOMIC_TASKS.md`/`FEATURES.md`** (the
+actively-edited current-state record — authoritative when something
+disagrees with the wiki), and **`docs/` (the wiki)** — a browsable,
+cross-linked narrative layer, additive, not authoritative.
+
+**The boy scout rule for comments** (added 2026-10-11): whenever a comment
+that isn't already a proper godoc comment gets touched — editing the line
+it sits near, touching the function/type it narrates, or just noticing it
+while reading nearby code — decide its fate instead of leaving it as-is:
+
+- **Delete it** if better naming/structure would make it unnecessary — a
+  comment restating what the next line already obviously does.
+- **Reformat it into a real godoc comment** on the right exported symbol,
+  if it's actually describing that symbol's contract/behavior/gotcha but
+  sitting in the wrong place (inline mid-function instead of as a doc
+  comment on the type/func itself).
+- **Move it to the package-level doc comment** if it's about the package
+  as a whole rather than one symbol.
+- **Move it out of the codebase entirely into `docs/`** if it's real
+  narrative/architectural reasoning that belongs in the wiki, not a `//`
+  comment — "why this pattern instead of the obvious alternative,"
+  cross-package reasoning godoc can't express.
+- Only genuinely load-bearing inline comments stay as-is: a non-obvious
+  constraint, a past-bug workaround, a subtle invariant — not narration.
+  See `docs/concepts/` if unsure whether something's actually one of
+  these versus narration in disguise.
+
+This is opportunistic, not a dedicated sweep: applied to comments already
+being touched for some other reason, cleaning the codebase up incrementally
+as it's worked on rather than as a standalone task.
+
 ## Known issues / in-progress refactor
 
 Resolved history, kept briefly for context: `cmd/api/main.go` failing to
