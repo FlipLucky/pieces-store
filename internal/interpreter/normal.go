@@ -164,6 +164,31 @@ type HoverAction struct{}
 
 func (a HoverAction) Kind() types.ActionKind { return types.ActionHover }
 
+// BeginFindCharAction is f/F's first keystroke: tells Executor to put the
+// editor into "the next raw key is the target char to search for" mode,
+// same shape as BeginReplaceAction/ReplaceRuneAction for r. IsForward
+// records which of f/F started the pending state, carried through so the
+// second keystroke (constructed directly by Editor, bypassing this
+// package's normal ProcessNormal path entirely — there's no sequence to
+// validate) knows which direction to search.
+type BeginFindCharAction struct{ IsForward bool }
+
+func (a BeginFindCharAction) Kind() types.ActionKind { return types.ActionBeginFindChar }
+func (a BeginFindCharAction) Forward() bool          { return a.IsForward }
+
+// ResolveFindChar is f/F's second keystroke: given the raw rune the user
+// just typed and which direction the pending state was started in,
+// resolves where the cursor would land. Constructed directly by Editor
+// once the target rune arrives, same as ReplaceRuneAction — f/F are
+// standalone motions, not something keyengine's grammar validates a
+// second keystroke against.
+func ResolveFindChar(doc offset.Document, at Position, target rune, forward bool) MoveAction {
+	if forward {
+		return MoveAction{Target: offset.MotionFindCharForward(doc, at.ByteOffset, string(target)), Ok: true}
+	}
+	return MoveAction{Target: offset.MotionFindCharBackward(doc, at.ByteOffset, string(target)), Ok: true}
+}
+
 // ProcessNormal is Normal mode's Processor: a validated keyengine command,
 // the document to resolve motions/ranges against, a position snapshot, and
 // what p/P would currently paste, in — one or more fully-resolved Actions
@@ -184,11 +209,11 @@ func ProcessNormal(cmd *keyengine.ExecutableCommand, doc offset.Document, at Pos
 	case keyengine.Move:
 		return one(resolveMove(doc, cmd.Noun, at, count))
 	case keyengine.Delete:
-		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset)
+		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset, count)
 		linewise := cmd.Noun == keyengine.LineMotion
 		return one(DeleteAction{Rng: rng, Ok: ok, Register: clipboardregister.Delete, StoreInRegister: ok, IsLinewise: linewise})
 	case keyengine.Change:
-		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset)
+		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset, count)
 		if !ok {
 			return nil
 		}
@@ -198,7 +223,7 @@ func ProcessNormal(cmd *keyengine.ExecutableCommand, doc offset.Document, at Pos
 			EnterInsertAction{},
 		}
 	case keyengine.Yank:
-		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset)
+		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset, count)
 		linewise := cmd.Noun == keyengine.LineMotion
 		return one(YankAction{Rng: rng, Ok: ok, IsLinewise: linewise})
 	case keyengine.Undo:
@@ -217,6 +242,10 @@ func ProcessNormal(cmd *keyengine.ExecutableCommand, doc offset.Document, at Pos
 		return one(OpenLineAction{IsBelow: false})
 	case keyengine.Hover:
 		return one(HoverAction{})
+	case keyengine.FindCharForward:
+		return one(BeginFindCharAction{IsForward: true})
+	case keyengine.FindCharBackward:
+		return one(BeginFindCharAction{IsForward: false})
 	case keyengine.Paste:
 		if !clip.Ok {
 			return nil
@@ -367,10 +396,38 @@ func resolveMotion(doc offset.Document, noun keyengine.KeyActionName, from int) 
 	}
 }
 
-// resolveRange turns a Delete command's Modifier+Noun into a concrete
-// TextRange at the given offset. Same no-op-on-unknown contract as
-// resolveMotion.
-func resolveRange(doc offset.Document, modifier, noun keyengine.KeyActionName, at int) (offset.TextRange, bool) {
+// resolveRange turns a Delete/Change/Yank command's Modifier+Noun into a
+// concrete TextRange at the given offset, repeated count times by
+// chaining each resolution onto the end of the last — 3diw deletes three
+// consecutive "inner word" units, 3dd three consecutive lines, and so on
+// (matches real vim's own documented counted-iw behavior: a whitespace
+// run between words counts as its own unit in the chain, same as a word
+// does). A count that runs past the document's end naturally saturates
+// rather than erroring — offset.RangeLine/RangeInnerWord/etc. all clamp
+// to the document boundary on their own, so chaining past it just keeps
+// re-resolving the same boundary range instead of growing further (see
+// TestCountedDeleteStopsAtDocumentEnd). ok is false only when the
+// Modifier+Noun combination itself isn't recognized at all — fixed for
+// the whole call, so once the first resolution succeeds every later one
+// in the chain does too; there's no per-iteration failure case to guard.
+func resolveRange(doc offset.Document, modifier, noun keyengine.KeyActionName, at int, count int) (offset.TextRange, bool) {
+	if count < 1 {
+		count = 1
+	}
+	rng, ok := resolveRangeOnce(doc, modifier, noun, at)
+	if !ok {
+		return offset.TextRange{}, false
+	}
+	for i := 1; i < count; i++ {
+		next, _ := resolveRangeOnce(doc, modifier, noun, rng.Start+rng.Length)
+		rng.Length = (next.Start + next.Length) - rng.Start
+	}
+	return rng, true
+}
+
+// resolveRangeOnce is resolveRange's single-application resolver — same
+// no-op-on-unknown contract as resolveMotion.
+func resolveRangeOnce(doc offset.Document, modifier, noun keyengine.KeyActionName, at int) (offset.TextRange, bool) {
 	switch {
 	case modifier == keyengine.Inside && noun == keyengine.Word:
 		return offset.RangeInnerWord(doc, at), true

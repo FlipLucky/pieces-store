@@ -59,6 +59,9 @@ type Editor interface {
 	// cursor.LSPCompletion).
 	ConfirmLSPCompletion()
 	CycleLSPCompletion(direction int)
+	// BeginPendingFindChar puts the editor into "the next raw key is the
+	// target char for f/F" mode — mirrors BeginPendingReplace.
+	BeginPendingFindChar(forward bool)
 }
 
 // Small, optional-capability interfaces for pulling an Action's payload
@@ -81,6 +84,7 @@ type (
 		RegisterDestination() (clipboardregister.RegisterType, bool)
 	}
 	hasLinewise interface{ Linewise() bool }
+	hasForward  interface{ Forward() bool }
 )
 
 // Dispatch performs a, calling whichever of ed's methods its Kind maps to.
@@ -146,6 +150,10 @@ func Dispatch(a Action, ed Editor) {
 		}
 	case types.ActionBeginReplace:
 		ed.BeginPendingReplace()
+	case types.ActionBeginFindChar:
+		if p, ok := a.(hasForward); ok {
+			ed.BeginPendingFindChar(p.Forward())
+		}
 	case types.ActionReplaceRune:
 		if p, ok := a.(hasRune); ok {
 			ed.ReplaceRune(p.Rune())

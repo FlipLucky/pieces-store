@@ -16,8 +16,12 @@ independent of vim keybindings specifically.
   almost everything else here), predicates, and the vim motion/text-object
   resolvers built on it: `MotionWordForward`/`Backward`/`End`,
   `RangeInnerWord`/`AroundWord`/`Paragraph`, `RangeLine`,
-  `MotionFindCharForward` (implemented and tested, but currently stranded
-  — no `f`/`F` keybinding wires it up yet, see `ATOMIC_TASKS.md`'s T18b).
+  `MotionFindCharForward`/`MotionFindCharBackward` (`f`/`F`, wired into a
+  real keybinding 2026-10-11 — see
+  [interpreter](interpreter.md)'s `BeginFindCharAction`/`ResolveFindChar`).
+  Neither has a line-boundary guard yet (real vim's `f`/`F`/`t`/`T` stop at
+  the current line's end; `FindOffset` has no concept of lines at all) —
+  a known, documented simplification, not a silent gap.
   `ScanUntil` is dead code — an abandoned attempt to simplify/replace
   `FindOffset` that never got finished; not yet decided whether to delete
   it or complete the replacement.

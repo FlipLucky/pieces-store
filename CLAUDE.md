@@ -1081,6 +1081,38 @@ This is opportunistic, not a dedicated sweep: applied to comments already
 being touched for some other reason, cleaning the codebase up incrementally
 as it's worked on rather than as a standalone task.
 
+**The same boy scout rule applies to naming, not just comments** (added
+2026-10-11, refined same day from a real case: `piecetable`'s internal
+piece-lookup helper, see `ATOMIC_TASKS.md`'s T16). A calling-convention
+precondition — "the caller must already hold a lock," "this assumes X was
+validated upstream" — is procedure, a *how*, not a *what*, and doesn't
+belong baked into a name as a suffix (`findPieceAtLocked`). Where it
+belongs depends on who actually needs to know it:
+
+- If every call site already satisfies the precondition structurally (a
+  write-locked caller and a read-locked caller both routing through the
+  same lock-free internal lookup, say), there's no real per-call-site
+  ambiguity to flag at all — the precondition is an architectural fact
+  about the *package*, not a warning for any one function's callers. State
+  it once, in the package's own doc comment ("every exported method is
+  self-locking; no unexported helper ever locks, and none should be called
+  except already-locked") — not repeated per-function.
+- Only fall back to a precondition note on the individual symbol's own doc
+  comment when the package-wide invariant genuinely doesn't cover it (a
+  helper with a real mix of locked and unlocked callers, needing a reader
+  to actually stop and check before adding a new call site).
+
+Either way, **no external package should ever need to know or care that
+locking happens at all** — that's the owning package's fully encapsulated
+concern, invisible across the boundary, same as any other implementation
+detail. This means the existing `*Locked`-suffixed methods
+(`moveCursorUpLocked`/`undoLocked`/`setModeLocked`/etc. — see
+`docs/packages/editor.md`'s `*Locked` method-splitting convention entry)
+are **grandfathered, not due for a mass rename**: new code follows the
+style above; existing `*Locked` names get the same treatment
+opportunistically, when touched for some other reason anyway — identical
+discipline to the comment rule above, just applied to names.
+
 ## Known issues / in-progress refactor
 
 Resolved history, kept briefly for context: `cmd/api/main.go` failing to

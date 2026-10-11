@@ -67,5 +67,7 @@ func CreateNormalModeDirects() map[string]DirectAction {
 		"K":       {Verb: Hover},
 		"p":       {Verb: Paste},
 		"P":       {Verb: PasteBefore},
+		"f":       {Verb: FindCharForward},
+		"F":       {Verb: FindCharBackward},
 	}
 }

@@ -75,6 +75,7 @@ const (
 	ActionConfirmCompletion
 	ActionCycleCompletion
 	ActionYank
+	ActionBeginFindChar
 )
 
 // Language identifies which language a buffer's content is written in —

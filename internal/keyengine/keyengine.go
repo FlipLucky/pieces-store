@@ -35,6 +35,16 @@ const (
 	Paste       // p — paste after the cursor
 	PasteBefore // P — paste before the cursor
 
+	// FindCharForward/FindCharBackward (f/F) are standalone motions, not
+	// operators — like Replace, they need a second raw keystroke (the
+	// target char) that bypasses this parser entirely (see
+	// interpreter.ResolveFindChar and dispatch.go's pendingFindChar
+	// branch). Deliberately not yet composable with an operator (df{char},
+	// dt{char}) — that needs a new modifier/noun shape, not just these two
+	// verbs; see ATOMIC_TASKS.md.
+	FindCharForward
+	FindCharBackward
+
 	// Modifiers
 	Inside
 	Around

@@ -214,20 +214,76 @@ nothing here needs the redesign to land first.
 - [ ] **T16** — Fix `piecetable.GetRuneAt`/`FindPieceAt` bypassing their
       own mutex — a real, self-contained concurrency bug, good for
       sharpening Go skills without touching unfamiliar territory. (M, 🧠)
-- [ ] **T17** — Implement counted delete (`3diw`) in `interpreter`'s
-      Delete-verb handling (`ProcessNormal`/`resolveRange`,
-      `internal/interpreter/normal.go` — moved here from `dispatch.go`'s
-      now-deleted `executeDelete` during T19). Mirrors the count-loop
-      pattern `resolveMove` (same file) already uses for Move. (S, 🔧)
-- [ ] **T18b** — `offset.MotionFindCharForward` (`f{char}`'s motion math)
-      is fully implemented and unit-tested but was never wired into
-      `keyengine` — no `f`/`F` verb or direct exists in `normal_mode.go`,
-      found via a dead-code scan 2026-10-11. Looks like a primitive built
-      ahead of its keybinding, not a mistake. Decide: wire up `f`/`F` as a
-      real keybinding (the resolver's already done — this is mostly a
-      `normal_mode.go` table entry plus a `resolveMotion` case in
-      `interpreter/normal.go`), or delete it if `f`/`F` isn't wanted yet.
-      Not decided here — your call. (S, ❓)
+      Scoped 2026-10-11, not yet built — see
+      `docs/packages/piecetable.md`'s "Known, deliberately-deferred gaps"
+      for the exact lines and the fix shape, written up for you to drive.
+      Naming note: the new unexported helper should be a plain,
+      behavior-named identifier (e.g. `pieceAt`), *not* `findPieceAtLocked`.
+      Where the locking explanation goes, refined 2026-10-11: not a
+      precondition comment on the individual helper either — `Insert`
+      (write lock) and `GetRuneAt` (read lock) both call the same
+      lock-free lookup already locked, so there's no real per-site
+      ambiguity to flag at that level. The actual invariant worth stating
+      ("every exported `Table` method is self-locking; no unexported
+      helper ever locks, and none should be called except from somewhere
+      that already holds `s.mu`") is package-wide architecture, not one
+      function's business — write it into `table.go`'s existing package
+      doc comment, once, and let individual helpers stay undocumented on
+      this point entirely. No external package (`executor`, `editor`, ...)
+      should ever need to know or care that locking happens at all —
+      that's `piecetable`'s own encapsulated concern end to end.
+- [x] **T17** — Counted delete/change/yank (`3diw`, `2dd`, ...). Done
+      2026-10-11: `resolveRange` (`internal/interpreter/normal.go`) now
+      takes `count` and chains `resolveRangeOnce` that many times, each
+      application starting where the last one ended — matches real vim's
+      own documented counted-`iw` behavior (a whitespace run between words
+      counts as its own chained unit, same as a word does). A count
+      running past the document's end naturally saturates rather than
+      erroring, since `RangeLine`/`RangeInnerWord`/etc. already clamp to
+      the document boundary on their own — no explicit bounds-check
+      needed. Covers Delete/Change/Yank all at once (not just Delete as
+      originally scoped) since all three share this one resolver — see
+      `TestCountedDeleteInnerWord`/`TestCountedDD`/
+      `TestCountedDeleteStopsAtDocumentEnd` in
+      `internal/editor/dispatch_test.go`. **Verified against real vim
+      docs, not just asserted**: `3diw` really does alternate word/
+      whitespace as separate counted units in vim too — confirmed via
+      search before claiming it, since this got pushed back on. **Distinct
+      from `3dw`** (operator + bare motion, no modifier) — a genuinely
+      different vim command this codebase has never implemented at all
+      (confirmed: `dw` is currently a silent no-op). See new **T17b**.
+- [x] **T18b** — `f`/`F` wired up for real. Done 2026-10-11: new
+      `offset.MotionFindCharBackward` (F's mirror of the existing
+      `MotionFindCharForward`), new `keyengine.FindCharForward`/
+      `FindCharBackward` verbs registered as directs, new
+      `interpreter.BeginFindCharAction`/`ResolveFindChar` (same two-
+      keystroke shape as `r`'s `BeginReplaceAction`/`ReplaceRuneAction` —
+      f/F's second keystroke bypasses `ProcessNormal`'s normal path
+      entirely, same as r's does), new `Editor.pendingFindChar` state
+      mirroring `pendingReplace`. Resolution (`interpreter.ResolveFindChar`,
+      a real computation against doc/cursor state) stays out of
+      `dispatch.go`'s own body, unlike r's second keystroke which needs no
+      resolution at all — see `docs/concepts/orchestrator-instrument.md`.
+      Deliberately **not** composable with an operator yet (`df{char}`,
+      `dt{char}`) — that needs a new modifier/noun shape in `keyengine`,
+      a genuinely separate piece of work, not bundled in here. Also
+      doesn't support a count prefix (`3fa`) yet, since the count would
+      need to be carried across the two-keystroke boundary into the
+      pending state — skipped for this pass, not forgotten.
+- [ ] **T17b** — Implement `dw`/`db`/`de` (operator + bare motion delete,
+      no modifier) — currently a confirmed, silent no-op: `d` followed by
+      a bare `w`/`b`/`e` resolves to `{Verb:Delete, Modifier:None,
+      Noun:Word/...}`, which `resolveRange`/`resolveRangeOnce` has no case
+      for at all. Needs a genuinely different code path from T17's
+      text-object chaining: a range from the cursor to wherever
+      `resolveMotion` (already built, used by plain `Move`) lands, with
+      the count applied the way real vim does for `3dw`/`d3w` (three
+      whole word-motions swept over, not word/whitespace alternation the
+      way counted `diw` works — these are two different vim commands with
+      different counting rules, confirmed against vim's own docs 2026-10-
+      11). (M, 🤖 or 🔧 — the hard part, `resolveMotion`, already exists;
+      this is mostly a new `resolveRange`-shaped function for the
+      Delete-with-no-modifier case plus wiring it into `ProcessNormal`.)
 
 ## Longer horizon — browse, don't start yet
 

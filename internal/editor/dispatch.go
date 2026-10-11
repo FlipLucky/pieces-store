@@ -107,6 +107,26 @@ func (e *Editor) handleNormalModeKey(key string) bool {
 		return true
 	}
 
+	// f/F's second keystroke — same one-keystroke literal-capture shape as
+	// pendingReplace above, resolved via interpreter.ResolveFindChar (a
+	// real computation against doc/cursor state, unlike r's second
+	// keystroke, which needs no resolution at all) rather than constructed
+	// directly here — keeps resolution logic out of Editor's own body, per
+	// docs/concepts/orchestrator-instrument.md.
+	if e.pendingFindChar {
+		forward := e.findCharForward
+		e.pendingFindChar = false
+		if key != "<Esc>" {
+			if runes := []rune(key); len(runes) == 1 {
+				e.mu.Lock()
+				pos := interpreter.Position{ByteOffset: e.cursor.ByteOffset, Row: e.cursor.Row, Col: e.cursor.Col}
+				e.dispatchLocked(interpreter.ResolveFindChar(e.table, pos, runes[0], forward))
+				e.mu.Unlock()
+			}
+		}
+		return true
+	}
+
 	e.commandContext.SetEditorMode(types.Mode(e.GetModeInt()))
 	cmd, err := e.commandContext.ProcessCommand(key)
 	if err != nil {
@@ -228,6 +248,13 @@ func (v lockedEditorView) Redo() bool { return v.e.redoLocked() }
 func (v lockedEditorView) SetMode(m types.Mode) { v.e.setModeLocked(m) }
 
 func (v lockedEditorView) BeginPendingReplace() { v.e.pendingReplace = true }
+
+// BeginPendingFindChar implements f/F's first keystroke — mirrors
+// BeginPendingReplace.
+func (v lockedEditorView) BeginPendingFindChar(forward bool) {
+	v.e.pendingFindChar = true
+	v.e.findCharForward = forward
+}
 
 // ReplaceRune implements r's second keystroke: swap exactly the rune
 // under the cursor for the one just typed, leaving the cursor in place.

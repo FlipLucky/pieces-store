@@ -24,6 +24,8 @@ type Editor struct {
 	cursor            *Cursor
 	commandContext    *keyengine.CommandContext
 	pendingReplace    bool
+	pendingFindChar   bool
+	findCharForward   bool
 	clipboardRegister *clipboardregister.ClipboardRegister
 	// completionLineHead is the command buffer content before the token a
 	// completion cycle is replacing — only meaningful while

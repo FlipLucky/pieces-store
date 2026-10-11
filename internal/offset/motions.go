@@ -294,17 +294,26 @@ func RangeInnerParagraph(doc Document, currentOffset int) TextRange {
 	return TextRange{Start: start, Length: end - start}
 }
 
-// fX: Find character X forward
+// MotionFindCharForward is f{char}: the offset of the next occurrence of
+// target strictly after currentOffset, searching forward with no line
+// boundary (unlike real vim's f/F/t/T, which stop at the current line's
+// end — not yet replicated here, since FindOffset has no concept of line
+// boundaries at all). Returns currentOffset unchanged if target is empty,
+// or doc.Len() if no match exists before the document ends.
 func MotionFindCharForward(doc Document, currentOffset int, target string) int {
 	if len(target) == 0 {
 		return currentOffset
 	}
 	targetRune := rune(target[0])
+	return FindOffset(doc, currentOffset, Forward, func(r rune) bool { return r == targetRune })
+}
 
-	// Predicate function generated dynamically at runtime for this specific keystroke!
-	matchTarget := func(r rune) bool {
-		return r == targetRune
+// MotionFindCharBackward is F{char}: MotionFindCharForward's mirror,
+// searching backward instead. Same no-line-boundary caveat applies.
+func MotionFindCharBackward(doc Document, currentOffset int, target string) int {
+	if len(target) == 0 {
+		return currentOffset
 	}
-
-	return FindOffset(doc, currentOffset, Forward, matchTarget)
+	targetRune := rune(target[0])
+	return FindOffset(doc, currentOffset, Backward, func(r rune) bool { return r == targetRune })
 }

@@ -42,6 +42,19 @@ again while building the Validator→Processor→Executor pipeline) — treat it
 as a load-bearing pattern, not incidental style, before adding a new
 locked method.
 
+**The split itself is load-bearing; the `Locked` suffix in the name is
+not** (revisited 2026-10-11): the precondition — "caller must already hold
+the lock" — is a calling convention, not behavior, and doesn't belong
+baked into the name. These existing names are grandfathered, not due for a
+mass rename; new lock-free helpers (see `piecetable`'s planned `pieceAt`,
+`ATOMIC_TASKS.md`'s T16) use a plain, behavior-named identifier instead —
+and when every call site already satisfies the precondition structurally
+(not a per-function concern at all, just an architectural fact about the
+package), the explanation lives once in the *package's* own doc comment,
+not repeated on each helper. No external package should ever need to know
+or care that locking happens at all. See CLAUDE.md's Documentation
+conventions section.
+
 ## Other responsibilities
 
 - File I/O, vim-style command mode (`:w`, `:e`, `:q`/`:q!`, `:wq`,

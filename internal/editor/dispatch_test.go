@@ -83,6 +83,90 @@ func TestDIP(t *testing.T) {
 	}
 }
 
+// TestCountedDeleteInnerWord covers T17 (3diw): resolveRange chains
+// resolveRangeOnce count times, extending the range by one more "inner
+// word" application each time. Matches real vim's own documented counted
+// -iw behavior: a whitespace run between words counts as its own unit in
+// the chain, same as a word does — so 3diw from "foo" consumes
+// "foo" + " " + "bar", not three whole words.
+func TestCountedDeleteInnerWord(t *testing.T) {
+	e := NewEditor("foo bar baz qux")
+	typeKeys(e, "3", "d", "i", "w")
+
+	if got := e.GetText(); got != " baz qux" {
+		t.Errorf("GetText() after 3diw = %q, want %q", got, " baz qux")
+	}
+}
+
+// TestCountedDD covers the same chaining for the LineMotion case: 2dd
+// deletes two consecutive whole lines.
+func TestCountedDD(t *testing.T) {
+	e := NewEditor("line1\nline2\nline3")
+	typeKeys(e, "2", "d", "d")
+
+	if got := e.GetText(); got != "line3" {
+		t.Errorf("GetText() after 2dd = %q, want %q", got, "line3")
+	}
+}
+
+// TestCountedDeleteStopsAtDocumentEnd covers the "stop at the edge, keep
+// progress" half of the contract: a count larger than what the document
+// has left still deletes whatever could be chained, rather than failing
+// the whole operation.
+func TestCountedDeleteStopsAtDocumentEnd(t *testing.T) {
+	e := NewEditor("line1\nline2")
+	typeKeys(e, "9", "d", "d")
+
+	if got := e.GetText(); got != "" {
+		t.Errorf("GetText() after 9dd on a 2-line buffer = %q, want %q", got, "")
+	}
+}
+
+// TestFindCharForward covers T18b: f{char} moves the cursor to the next
+// occurrence of char strictly after the cursor, on this specific keystroke
+// (not a general search) — a pure motion with no buffer mutation.
+func TestFindCharForward(t *testing.T) {
+	e := NewEditor("foo bar baz")
+	typeKeys(e, "f", "b")
+
+	if off := e.GetCursor().ByteOffset; off != 4 {
+		t.Errorf("cursor offset after fb = %d, want 4 (start of \"bar\")", off)
+	}
+	if got := e.GetText(); got != "foo bar baz" {
+		t.Errorf("GetText() after fb = %q, want unchanged %q", got, "foo bar baz")
+	}
+}
+
+// TestFindCharBackward covers F{char}: same as f, searching backward.
+func TestFindCharBackward(t *testing.T) {
+	e := NewEditor("foo bar baz")
+	for i := 0; i < 10; i++ {
+		e.MoveCursorRight() // onto "baz"
+	}
+	typeKeys(e, "F", "o")
+
+	if off := e.GetCursor().ByteOffset; off != 2 {
+		t.Errorf("cursor offset after Fo = %d, want 2 (the 'o' in \"foo\")", off)
+	}
+}
+
+// TestFindCharEscCancelsPending confirms <Esc> after f/F cancels the
+// pending state without moving the cursor, same as r's own <Esc> contract.
+func TestFindCharEscCancelsPending(t *testing.T) {
+	e := NewEditor("foo bar baz")
+	typeKeys(e, "f", "<Esc>")
+
+	if off := e.GetCursor().ByteOffset; off != 0 {
+		t.Errorf("cursor offset after f<Esc> = %d, want 0 (unchanged)", off)
+	}
+
+	// Confirm normal parsing resumes afterward — not left stuck pending.
+	typeKeys(e, "w")
+	if off := e.GetCursor().ByteOffset; off != 4 {
+		t.Errorf("cursor offset after f<Esc> w = %d, want 4 (w still works)", off)
+	}
+}
+
 func TestWordMotions(t *testing.T) {
 	e := NewEditor("foo bar baz")
 
