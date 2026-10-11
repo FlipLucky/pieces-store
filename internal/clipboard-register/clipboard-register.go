@@ -1,7 +1,19 @@
 package clipboardregister
 
 type RegisterType int
-type Register []string
+
+// Entry is one stored register value together with whether it came from a
+// linewise operation (yy/dd/cc — a whole line, via keyengine's generic
+// doubled-verb/LineMotion mechanism) or a charwise one (yiw/diw/ciw and
+// friends — an arbitrary span of text). Paste needs this to decide whether
+// pasted text becomes its own fresh line or splices in at the cursor the
+// way a plain text insert does.
+type Entry struct {
+	Value    string
+	Linewise bool
+}
+
+type Register []Entry
 
 const (
 	Unnamed RegisterType = iota
@@ -34,19 +46,21 @@ func (c *ClipboardRegister) getRegister(
 func (c *ClipboardRegister) StoreRegisterValue(
 	value string,
 	registerType RegisterType,
+	linewise bool,
 ) {
-	appendToRegister(value, &c.unnamedRegister)
+	entry := Entry{Value: value, Linewise: linewise}
+	appendToRegister(entry, &c.unnamedRegister)
 	if register := c.getRegister(registerType); register != nil {
-		appendToRegister(value, register)
+		appendToRegister(entry, register)
 	}
 
 }
 
 func appendToRegister(
-	value string,
+	entry Entry,
 	register *Register,
 ) {
-	*register = append(Register{value}, (*register)...)
+	*register = append(Register{entry}, (*register)...)
 	if len(*register) > 9 {
 		*register = (*register)[:9]
 	}
@@ -54,23 +68,23 @@ func appendToRegister(
 
 func (c *ClipboardRegister) GetValueFromRegister(
 	registerType RegisterType, index int,
-) (string, bool) {
+) (Entry, bool) {
 	register := c.getRegister(registerType)
 	if register == nil || (index < 0 || index >= len(*register)) {
-		return "", false
+		return Entry{}, false
 	}
 	return (*register)[index], true
 }
 
 func (c *ClipboardRegister) GetValueFromUnnamedRegister(
 	index int,
-) (string, bool) {
+) (Entry, bool) {
 	if index < 0 || index >= len(c.unnamedRegister) {
-		return "", false
+		return Entry{}, false
 	}
 	return c.unnamedRegister[index], true
 }
 
-func (c *ClipboardRegister) Paste() (string, bool) {
+func (c *ClipboardRegister) Paste() (Entry, bool) {
 	return c.GetValueFromUnnamedRegister(0)
 }

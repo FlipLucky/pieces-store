@@ -79,11 +79,12 @@ type ChangeEvent struct {
 
 func NewEditor(initialText string) *Editor {
 	ed := &Editor{
-		table:          piecetable.NewPieceTable([]byte(initialText)),
-		virtualGrid:    viewmanager.NewVirtualGrid(),
-		cursor:         NewCursor(),
-		commandContext: keyengine.CreateCommandContext(),
-		change:         make(chan ChangeEvent, 1),
+		table:             piecetable.NewPieceTable([]byte(initialText)),
+		virtualGrid:       viewmanager.NewVirtualGrid(),
+		cursor:            NewCursor(),
+		commandContext:    keyengine.CreateCommandContext(),
+		clipboardRegister: &clipboardregister.ClipboardRegister{},
+		change:            make(chan ChangeEvent, 1),
 	}
 	ed.startAsyncLoop()
 
@@ -96,11 +97,12 @@ func NewEditorFromFile(filePath string) (*Editor, error) {
 		return nil, err
 	}
 	e := &Editor{
-		table:          table,
-		virtualGrid:    viewmanager.NewVirtualGrid(),
-		cursor:         NewCursor(),
-		commandContext: keyengine.CreateCommandContext(),
-		change:         make(chan ChangeEvent, 1),
+		table:             table,
+		virtualGrid:       viewmanager.NewVirtualGrid(),
+		cursor:            NewCursor(),
+		commandContext:    keyengine.CreateCommandContext(),
+		clipboardRegister: &clipboardregister.ClipboardRegister{},
+		change:            make(chan ChangeEvent, 1),
 	}
 	e.startAsyncLoop()
 	e.setupHighlighterLocked()

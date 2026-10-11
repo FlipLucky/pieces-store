@@ -8,6 +8,7 @@
 package executor
 
 import (
+	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
 	"github.com/fliplucky/pieces-store/internal/offset"
 	"github.com/fliplucky/pieces-store/internal/types"
 )
@@ -31,6 +32,17 @@ type Action interface {
 type Editor interface {
 	MoveCursorToOffset(target int)
 	DeleteRange(rng offset.TextRange)
+	// DeleteRangeWithRegister is DeleteRange plus storing the range's text
+	// into register before deleting it (d/c's own behavior) — a separate
+	// method rather than a parameter on DeleteRange, so DeleteRange's
+	// existing callers (Insert mode's backspace, via a DeleteAction that
+	// leaves StoreInRegister false) are untouched. linewise is threaded
+	// through to the stored register entry so a later paste knows whether
+	// to splice charwise or insert as a fresh line.
+	DeleteRangeWithRegister(rng offset.TextRange, register clipboardregister.RegisterType, linewise bool)
+	// YankRange stores the range's text into register and moves the
+	// cursor to its start, without touching the buffer at all.
+	YankRange(rng offset.TextRange, register clipboardregister.RegisterType, linewise bool)
 	Undo() bool
 	Redo() bool
 	SetMode(m types.Mode)
@@ -64,7 +76,11 @@ type (
 	hasInsertion interface {
 		Insertion() (text string, caretOffset int)
 	}
-	hasDirection interface{ Direction() int }
+	hasDirection           interface{ Direction() int }
+	hasRegisterDestination interface {
+		RegisterDestination() (clipboardregister.RegisterType, bool)
+	}
+	hasLinewise interface{ Linewise() bool }
 )
 
 // Dispatch performs a, calling whichever of ed's methods its Kind maps to.
@@ -87,7 +103,29 @@ func Dispatch(a Action, ed Editor) {
 	case types.ActionDelete:
 		if p, ok := a.(hasRange); ok {
 			if rng, has := p.Range(); has {
-				ed.DeleteRange(rng)
+				register, store := clipboardregister.RegisterType(0), false
+				if rp, ok := a.(hasRegisterDestination); ok {
+					register, store = rp.RegisterDestination()
+				}
+				if store {
+					linewise := false
+					if lp, ok := a.(hasLinewise); ok {
+						linewise = lp.Linewise()
+					}
+					ed.DeleteRangeWithRegister(rng, register, linewise)
+				} else {
+					ed.DeleteRange(rng)
+				}
+			}
+		}
+	case types.ActionYank:
+		if p, ok := a.(hasRange); ok {
+			if rng, has := p.Range(); has {
+				linewise := false
+				if lp, ok := a.(hasLinewise); ok {
+					linewise = lp.Linewise()
+				}
+				ed.YankRange(rng, clipboardregister.Yank, linewise)
 			}
 		}
 	case types.ActionUndo:

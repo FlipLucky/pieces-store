@@ -26,22 +26,20 @@ these out removes the "where was I" friction before anything else.
       so it was never going to finish as a `keyengine` type. Delete the
       stub; what replaces it is the real work in **T18** below, not a
       patch to this file.
-- [ ] **T3 — Decide the `clipboardRegister` field's fate the same way.**
-      It's declared on `Editor` but never constructed (always nil) or read
-      from any keybinding — same half-started shape. Either start wiring
-      real yank/paste now (T10–T12 below) or remove the field until that's
-      actually being built, so the struct doesn't advertise a capability
-      that silently does nothing. (S, 🧠)
+- [x] **T3 — Decide the `clipboardRegister` field's fate the same way.**
+      Resolved 2026-10-12 as a side effect of T10–T12: now constructed for
+      real in `NewEditor`/`NewEditorFromFile`.
 
-## 1. The key-handling pipeline redesign — yours to drive
+## 1. The key-handling pipeline redesign — done ✅
 
-Settled 2026-10-10 as a real design, not just a T2 patch — full reasoning
-in `DESIGN_KEY_PIPELINE.md`, promote to `CONCEPTS.md` once built. Short
-version: `Editor.HandleKey` becomes **Validate → Interpret → Apply**, three
-mode/`Target`-keyed handoffs, each one a
-[conveyor-belt splitter](CONCEPTS.md#decoupling-rule--conveyor-belt-splitter).
-This is bigger and more architectural than the rest of this file — treat it
-as its own multi-session arc, not a quick pickup.
+Settled 2026-10-10 as a real design, built 2026-10-11 (T18–T21, "module
+1"). Final shape: `Editor.HandleKey` routes through **Validator →
+Processor → Executor** (the names below solidified from the original
+Validate/Interpret/Apply framing as the design conversation continued) —
+see [Validator → Processor → Executor](CONCEPTS.md#validator--processor--executor)
+and [Decoupled by shape, not by sender](CONCEPTS.md#decoupled-by-shape-not-by-sender)
+for the lasting summary; `DESIGN_KEY_PIPELINE.md` is retired to
+history-only status. Kept below for the record, not as a pending list.
 
 - [x] **T18** — Delete `internal/keyengine/insert_mode.go`'s stub. Done
       2026-10-11; `go build`/`vet`/`test` all clean after. Incidentally
@@ -146,29 +144,54 @@ and [the orchestrator doesn't play an instrument](CONCEPTS.md#the-orchestrator-d
 - [ ] **T9** — Move `MoveCursorLeft/Right/Up/Down` (+ `*Locked` bodies) out
       of `editor.go` into `cursor.go`. Pure move, no logic change. (S, 🔧)
 
-## 3. Registers & real yank/paste — yours to drive
+## 3. Registers & real yank/paste — done ✅
 
-`internal/clipboard-register` is your own design (built end-to-end last
-time without me writing the implementation) — wiring it into real
-keybindings is a natural continuation of that, not a new delegate-or-not
-question. Each of these is a new instance of
-[action+offset](CONCEPTS.md#actionoffset): a verb applying an action
-through an existing resolver. **Note:** once T19–T21 above land, these
-verbs are the first real content flowing through the new Interpret/Apply
-pipeline rather than the old direct-dispatch path — worth sequencing after
-the pipeline redesign, not before, so this isn't built twice.
+Done 2026-10-12. `internal/clipboard-register` (the user's own design) is
+now wired into real keybindings — `go build`/`vet`/`test` all clean,
+both tagged builds clean, new `internal/editor/clipboard_test.go` covers
+yank/delete/change/paste/no-register-touch-on-replace end to end through
+real `HandleKey` sequences.
 
-- [ ] **T10** — Wire `y` as a new verb reusing the existing noun resolvers
-      (`yw`, `yiw`, `yy` for the whole line), storing the result via
-      `clipboardRegister.StoreRegisterValue(value, Yank)`. (M, 🧠)
-- [ ] **T11** — Wire `p`/`P` as direct actions pasting
-      `clipboardRegister.Paste()` after/before the cursor. **Note:** `p` is
-      already taken in `keyengine`'s noun table for `Paragraph` (`dip`) —
-      standalone paste needs its own key identity, not a collision with
-      that. (M, 🧠)
-- [ ] **T12** — Make `d` also store into the register (`Delete` type) so
-      `dd` then `p` round-trips the way real vim does. (S, 🔧 once T10/T11
-      exist)
+- [x] **T10** — `y` wired as a new verb (`yw`/`yiw`/`yy`), storing via
+      `clipboardRegister.StoreRegisterValue(value, Yank)`. New
+      `interpreter.YankAction` — stores text, moves cursor to the range's
+      start, never touches the buffer.
+- [x] **T11** — `p`/`P` wired as new direct verbs (`Paste`/`PasteBefore`
+      in `keyengine`). The feared `p`-as-`Paragraph`-noun collision never
+      materialized: directs and nouns are only ever consulted in mutually
+      exclusive parser states (no verb pending vs. a verb/modifier already
+      pending), so `p` is both the standalone paste key *and* `dip`'s
+      noun, with zero conflict. **Linewise paste, done 2026-10-11**:
+      `clipboardregister.Register` now stores `Entry{Value, Linewise}`
+      instead of a bare string (`StoreRegisterValue`/`GetValueFrom*`/
+      `Paste` all widened accordingly — the user's own package, extended
+      on their explicit request); `DeleteAction`/`YankAction` set
+      `IsLinewise` from `Noun == LineMotion` (the same doubled-verb signal
+      that already drove `dd`/`yy` themselves — "the processor determines
+      it from the key sequence," per the user's own framing); `Paste`/
+      `PasteBefore` in `ProcessNormal` branch on `clip.Linewise` and insert
+      the stored text as a genuine new line (via `offset.RangeLine`) above
+      or below the current line, instead of splicing charwise into it. One
+      real edge case found and fixed along the way: pasting *after* the
+      buffer's last line (which has no trailing `"\n"` of its own) needs a
+      leading `"\n"` inserted ahead of the register value as a separator,
+      or the two lines glue together — see `ProcessNormal`'s `Paste` case
+      and `clipboard_test.go`'s `TestDeleteThenPasteRoundTrips` (exercises
+      exactly this case) and `TestDeleteLineAndPasteBeforeMiddleOfBuffer`
+      (the ordinary, non-edge case for `P`).
+- [x] **T12** — `d` (and the new `c`) both store into the Delete register
+      before mutating, so `dd` then `p` round-trips, now linewise-correct
+      (see T11). `r` (Replace) deliberately stays out of the register
+      pipeline entirely — a real, tested guarantee
+      (`TestReplaceDoesNotTouchRegister`), not just an omission.
+- **Bonus, not originally scoped**: `c` (Change) — `ciw`/`caw`/`cc` now
+  work too, reusing `Delete`'s own modifier grammar (`Change` was already
+  a declared-but-unregistered `keyengine` verb) and the existing
+  `DeleteAction`/`EnterInsertAction` types unchanged. First real case of
+  `ProcessNormal`/`ProcessInsert` returning more than one `Action` — their
+  signature widened from `Action` to `[]Action`, applied by Executor in
+  order, exactly the shape `CONCEPTS.md`'s **Validator → Processor →
+  Executor** entry already described as intended, not yet exercised.
 
 ## 4. Find/replace (`:s///`) — the next roadmap item per `CLAUDE.md`
 
@@ -189,9 +212,11 @@ nothing here needs the redesign to land first.
 - [ ] **T16** — Fix `piecetable.GetRuneAt`/`FindPieceAt` bypassing their
       own mutex — a real, self-contained concurrency bug, good for
       sharpening Go skills without touching unfamiliar territory. (M, 🧠)
-- [ ] **T17** — Implement counted delete (`3diw`) in `executeDelete` —
-      mirrors the count-loop pattern `executeMove` (same file,
-      `dispatch.go`) already uses. (S, 🔧)
+- [ ] **T17** — Implement counted delete (`3diw`) in `interpreter`'s
+      Delete-verb handling (`ProcessNormal`/`resolveRange`,
+      `internal/interpreter/normal.go` — moved here from `dispatch.go`'s
+      now-deleted `executeDelete` during T19). Mirrors the count-loop
+      pattern `resolveMove` (same file) already uses for Move. (S, 🔧)
 
 ## Longer horizon — browse, don't start yet
 

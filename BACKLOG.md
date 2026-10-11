@@ -91,13 +91,13 @@ theme, not urgency — none of these block anything:
   of `editor.go` into `cursor.go` — `cursor.go` today only holds the
   `Cursor` *type*, no cursor behavior; the file's name should match its
   actual job.
-- Remove the `SIMULATE=true` typing-demo goroutine in `NewEditor`
-  (`internal/editor/editor.go`) — a leftover from the project's earliest
-  prototype phase, no longer needed. Note for whoever does this: it's not
-  the *only* reason `Editor`'s state needs its mutex on every access,
-  including plain getters — the async/LSP work introduced real concurrent
-  access independent of this demo code, so removing it doesn't relax any
-  locking.
+- ~~**Remove the `SIMULATE=true` typing-demo goroutine in `NewEditor`**~~
+  **Done** (the first key-handling-pipeline checkpoint commit, `b3121bc`) —
+  a leftover from the project's earliest prototype phase. Left `os`/`time`
+  imported-but-unused in `editor.go` as an incidental build break, found
+  and fixed while verifying T18 (2026-10-11). As expected, this didn't
+  relax any of `Editor`'s locking — the async/LSP work introduced real
+  concurrent access independent of this demo code.
 
 **A real missing package, mirroring one that already exists:**
 - ~~**Command-mode (`:...`) parsing deserves its own package, the same way

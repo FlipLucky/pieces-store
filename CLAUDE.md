@@ -636,6 +636,35 @@ Target+Action), only a future `:s///` would. None of this is built yet;
 `ATOMIC_TASKS.md`'s T18–T21 track the actual implementation as its own
 multi-session arc, separate from the smaller mechanical refactor items.
 
+**The key-handling pipeline redesign is built, 2026-10-11** — the
+Validate/Interpret/Apply naming above is historical; the design solidified
+into **Validator → Processor → Executor** (same shape, sharper names) as
+the conversation continued, and ATOMIC_TASKS.md's T18–T21 ("module 1") are
+all done. `internal/keyengine` stayed Normal mode's Validator unchanged;
+new `internal/interpreter` is Processor for both modes (`normal.go`
+relocates `resolveMotion`/`resolveRange` near-verbatim; `insert.go` folds
+Validator+Processor into one function, since Insert mode's grammar really
+is close to a no-op — confirmed, not just predicted); new
+`internal/executor` is Executor, a dispatch table keyed by
+`types.ActionKind`. `Action`/`KeySequence` landed as interfaces, not
+shared structs, specifically so a producer (today, `interpreter`; a future
+LSP-edit adapter or plugin surface) never needs to import Executor's
+package to construct one — see `CONCEPTS.md`'s **Validator → Processor →
+Executor** and **Decoupled by shape, not by sender** entries, which now
+carry the load-bearing summary; `DESIGN_KEY_PIPELINE.md` is retired to
+history-only status. `dispatch.go`'s old `execute()`/`executeMove`/
+`executeDelete` are gone outright — every Normal-mode verb and every
+Insert-mode keystroke ported through the new pipeline in one pass each,
+no dual-path left running on the old code. One concrete, already-proven
+payoff from the interface-based design: Insert mode's cursor motion and
+backspace-with-pair-collapse resolve into the *same* `MoveAction`/
+`DeleteAction` concrete types Normal mode's `w`/`dw` already produce —
+Executor's handlers for those needed zero changes when Insert mode was
+added. All pre-existing tests (bracket/quote/indent/undo-redo/hjkl/
+dispatch) pass unchanged throughout, confirming behavior was preserved,
+not just that the code compiles; both tagged `gui-local`/`tui-local`
+builds verified clean after each step.
+
 ## Module & toolchain
 
 - Module: `github.com/fliplucky/pieces-store`

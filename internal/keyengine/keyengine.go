@@ -21,7 +21,8 @@ const (
 
 	// Verbs
 	Delete
-	Change // declared for future use (ciw etc.) — not yet registered in any table
+	Change // ciw etc. — registered 2026-10-12, reuses Delete's own modifier grammar
+	Yank   // yiw etc. — same grammar as Delete/Change, added alongside Change
 	Move
 	Undo
 	Redo
@@ -30,7 +31,9 @@ const (
 	EnterCommand
 	OpenBelow
 	OpenAbove
-	Hover // K — request LSP hover at the cursor, added 2026-09-20
+	Hover       // K — request LSP hover at the cursor, added 2026-09-20
+	Paste       // p — paste after the cursor
+	PasteBefore // P — paste before the cursor
 
 	// Modifiers
 	Inside

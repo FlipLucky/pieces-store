@@ -6,6 +6,14 @@ func CreateNormalModeVerbs() map[string]KeyAction {
 			name:              Delete,
 			allowedKeyActions: map[string]KeyActionName{"i": Inside, "a": Around},
 		},
+		"c": {
+			name:              Change,
+			allowedKeyActions: map[string]KeyActionName{"i": Inside, "a": Around},
+		},
+		"y": {
+			name:              Yank,
+			allowedKeyActions: map[string]KeyActionName{"i": Inside, "a": Around},
+		},
 	}
 }
 
@@ -57,5 +65,7 @@ func CreateNormalModeDirects() map[string]DirectAction {
 		"o":       {Verb: OpenBelow},
 		"O":       {Verb: OpenAbove},
 		"K":       {Verb: Hover},
+		"p":       {Verb: Paste},
+		"P":       {Verb: PasteBefore},
 	}
 }

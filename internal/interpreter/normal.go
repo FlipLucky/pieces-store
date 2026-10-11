@@ -13,6 +13,7 @@
 package interpreter
 
 import (
+	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
 	"github.com/fliplucky/pieces-store/internal/keyengine"
 	"github.com/fliplucky/pieces-store/internal/offset"
 	"github.com/fliplucky/pieces-store/internal/types"
@@ -27,6 +28,22 @@ type Position struct {
 	ByteOffset int
 	Row        int
 	Col        int
+}
+
+// PasteClipboard is a read-only snapshot of what p/P would currently
+// paste — the unnamed register's newest value, if any. Same snapshot
+// pattern as Position/RuneContext: Processor never touches
+// *clipboardregister.ClipboardRegister directly, Editor reads it once
+// under the same lock as everything else and passes the value in.
+//
+// Linewise mirrors the entry's own flag (set by whichever of d/c/y
+// produced it, via Noun == LineMotion) — Paste/PasteBefore branch on it to
+// decide whether the stored text becomes its own fresh line or splices in
+// at the cursor the way a charwise insert does.
+type PasteClipboard struct {
+	Value    string
+	Linewise bool
+	Ok       bool
 }
 
 // Action is Normal mode's Processor output: a fully resolved, self-
@@ -55,13 +72,46 @@ func (a MoveAction) Offset() (int, bool)    { return a.Target, a.Ok }
 
 // DeleteAction is a fully-resolved deletion range. Ok is false when the
 // Modifier+Noun combination didn't resolve to a known range.
+//
+// Register/StoreInRegister are deliberately zero-value by default (no
+// register) rather than a required argument — Insert mode's backspace
+// (insert.go's resolveBackspace) constructs a DeleteAction too and must
+// NOT yank into a register the way d/c do, so the zero value has to mean
+// "just delete," not "delete into the unnamed register." Normal mode's
+// Delete/Change verbs below are the only producers that ever set these.
+//
+// IsLinewise is only meaningful when StoreInRegister is true (set from
+// Noun == LineMotion, i.e. dd/cc's doubled-verb form) — Executor threads it
+// through to the register entry so a later linewise paste can tell dd's
+// whole-line delete apart from diw's charwise one.
 type DeleteAction struct {
-	Rng offset.TextRange
-	Ok  bool
+	Rng             offset.TextRange
+	Ok              bool
+	Register        clipboardregister.RegisterType
+	StoreInRegister bool
+	IsLinewise      bool
 }
 
 func (a DeleteAction) Kind() types.ActionKind          { return types.ActionDelete }
 func (a DeleteAction) Range() (offset.TextRange, bool) { return a.Rng, a.Ok }
+func (a DeleteAction) RegisterDestination() (clipboardregister.RegisterType, bool) {
+	return a.Register, a.StoreInRegister
+}
+func (a DeleteAction) Linewise() bool { return a.IsLinewise }
+
+// YankAction is a fully-resolved yank range: store its text into a
+// register, move the cursor to its start, never touch the buffer. Ok is
+// false for the same reason as DeleteAction's. IsLinewise is set from
+// Noun == LineMotion (yy), same as DeleteAction's.
+type YankAction struct {
+	Rng        offset.TextRange
+	Ok         bool
+	IsLinewise bool
+}
+
+func (a YankAction) Kind() types.ActionKind          { return types.ActionYank }
+func (a YankAction) Range() (offset.TextRange, bool) { return a.Rng, a.Ok }
+func (a YankAction) Linewise() bool                  { return a.IsLinewise }
 
 // UndoAction/RedoAction carry the repeat count straight from the validated
 // command (keyengine already parsed any leading digit accumulation) —
@@ -113,11 +163,16 @@ type HoverAction struct{}
 func (a HoverAction) Kind() types.ActionKind { return types.ActionHover }
 
 // ProcessNormal is Normal mode's Processor: a validated keyengine command,
-// the document to resolve motions/ranges against, and a position snapshot,
-// in — a fully-resolved Action out. Returns nil only for a Verb this
-// function doesn't know about, which shouldn't happen for anything
-// keyengine's own whitelist tables actually produce.
-func ProcessNormal(cmd *keyengine.ExecutableCommand, doc offset.Document, at Position) Action {
+// the document to resolve motions/ranges against, a position snapshot, and
+// what p/P would currently paste, in — one or more fully-resolved Actions
+// out, applied by Executor in order (e.g. Change is "delete this range"
+// then "enter Insert mode"; Paste-after is "move past the cursor" then
+// "insert here" — see CONCEPTS.md's Validator → Processor → Executor entry
+// for why this is the Processor's intended output shape, not a special
+// case). Returns nil only for a Verb this function doesn't know about,
+// which shouldn't happen for anything keyengine's own whitelist tables
+// actually produce.
+func ProcessNormal(cmd *keyengine.ExecutableCommand, doc offset.Document, at Position, clip PasteClipboard) []Action {
 	count := cmd.Count
 	if count < 1 {
 		count = 1
@@ -125,30 +180,100 @@ func ProcessNormal(cmd *keyengine.ExecutableCommand, doc offset.Document, at Pos
 
 	switch cmd.Verb {
 	case keyengine.Move:
-		return resolveMove(doc, cmd.Noun, at, count)
+		return one(resolveMove(doc, cmd.Noun, at, count))
 	case keyengine.Delete:
 		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset)
-		return DeleteAction{Rng: rng, Ok: ok}
+		linewise := cmd.Noun == keyengine.LineMotion
+		return one(DeleteAction{Rng: rng, Ok: ok, Register: clipboardregister.Delete, StoreInRegister: ok, IsLinewise: linewise})
+	case keyengine.Change:
+		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset)
+		if !ok {
+			return nil
+		}
+		linewise := cmd.Noun == keyengine.LineMotion
+		return []Action{
+			DeleteAction{Rng: rng, Ok: true, Register: clipboardregister.Delete, StoreInRegister: true, IsLinewise: linewise},
+			EnterInsertAction{},
+		}
+	case keyengine.Yank:
+		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset)
+		linewise := cmd.Noun == keyengine.LineMotion
+		return one(YankAction{Rng: rng, Ok: ok, IsLinewise: linewise})
 	case keyengine.Undo:
-		return UndoAction{RepeatCount: count}
+		return one(UndoAction{RepeatCount: count})
 	case keyengine.Redo:
-		return RedoAction{RepeatCount: count}
+		return one(RedoAction{RepeatCount: count})
 	case keyengine.Replace:
-		return BeginReplaceAction{}
+		return one(BeginReplaceAction{})
 	case keyengine.EnterInsert:
-		return EnterInsertAction{}
+		return one(EnterInsertAction{})
 	case keyengine.EnterCommand:
-		return EnterCommandAction{}
+		return one(EnterCommandAction{})
 	case keyengine.OpenBelow:
-		return OpenLineAction{IsBelow: true}
+		return one(OpenLineAction{IsBelow: true})
 	case keyengine.OpenAbove:
-		return OpenLineAction{IsBelow: false}
+		return one(OpenLineAction{IsBelow: false})
 	case keyengine.Hover:
-		return HoverAction{}
+		return one(HoverAction{})
+	case keyengine.Paste:
+		if !clip.Ok {
+			return nil
+		}
+		if clip.Linewise {
+			// Linewise content already carries its own trailing "\n" (it
+			// was captured via RangeLine, same as dd/yy's own delete/yank
+			// range) — inserting it whole at the start of the *next* row
+			// lands it as a genuine new line below the current one,
+			// matching real vim's linewise p, rather than splicing into
+			// whatever line the cursor happens to sit on.
+			lineRange := offset.RangeLine(doc, at.ByteOffset)
+			insertAt := lineRange.Start + lineRange.Length
+			value := clip.Value
+			caret := 0
+			// The current line is the buffer's last line and has no
+			// trailing "\n" of its own (RangeLine's Length never counts a
+			// newline that isn't there) — insertAt sits at the literal end
+			// of the buffer with nothing separating it from the line
+			// above, so the pasted text's own trailing "\n" would end up
+			// *after* it instead of between the two lines. A leading "\n"
+			// here is the separator that newline would otherwise have
+			// been; caret skips past it so the cursor still lands on the
+			// pasted line's own first rune, not on the separator.
+			if insertAt >= doc.Len() && insertAt > 0 {
+				if r, _ := doc.GetRuneAt(insertAt - 1); r != '\n' {
+					value = "\n" + value
+					caret = 1
+				}
+			}
+			return []Action{
+				MoveAction{Target: insertAt, Ok: true},
+				InsertTextAction{Text: value, CaretOffset: caret},
+			}
+		}
+		return []Action{
+			MoveAction{Target: offset.MoveRight(doc, at.ByteOffset), Ok: true},
+			InsertTextAction{Text: clip.Value, CaretOffset: len(clip.Value)},
+		}
+	case keyengine.PasteBefore:
+		if !clip.Ok {
+			return nil
+		}
+		if clip.Linewise {
+			lineRange := offset.RangeLine(doc, at.ByteOffset)
+			return []Action{
+				MoveAction{Target: lineRange.Start, Ok: true},
+				InsertTextAction{Text: clip.Value, CaretOffset: 0},
+			}
+		}
+		return one(InsertTextAction{Text: clip.Value, CaretOffset: len(clip.Value)})
 	default:
 		return nil
 	}
 }
+
+// one wraps a single Action as the []Action slice ProcessNormal always
+// returns — most verbs only ever produce one.
+func one(a Action) []Action { return []Action{a} }
 
 // resolveMove turns a Move command's noun into a fully-resolved target
 // offset. j/k (LineUp/LineDown) need Row/Col to preserve the intended

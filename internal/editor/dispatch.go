@@ -3,6 +3,7 @@ package editor
 import (
 	"fmt"
 
+	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
 	"github.com/fliplucky/pieces-store/internal/executor"
 	"github.com/fliplucky/pieces-store/internal/interpreter"
 	"github.com/fliplucky/pieces-store/internal/offset"
@@ -44,8 +45,8 @@ func (e *Editor) handleInsertModeKey(key string) bool {
 		ctx.After, _ = e.table.GetRuneAt(pos.ByteOffset)
 	}
 	completionActive := e.cursor.LSPCompletion.Active
-	action := interpreter.ProcessInsert(key, e.table, pos, ctx, completionActive)
-	e.dispatchLocked(action)
+	actions := interpreter.ProcessInsert(key, e.table, pos, ctx, completionActive)
+	e.dispatchLocked(toExecutorActions(actions)...)
 	e.mu.Unlock()
 
 	// maybeTriggerLSPCompletion kicks off an async network request — a
@@ -127,33 +128,54 @@ func (e *Editor) handleNormalModeKey(key string) bool {
 	// hold e.mu for their whole resolve-then-apply body.
 	e.mu.Lock()
 	pos := interpreter.Position{ByteOffset: e.cursor.ByteOffset, Row: e.cursor.Row, Col: e.cursor.Col}
-	action := interpreter.ProcessNormal(cmd, e.table, pos)
-	e.dispatchLocked(action)
+	clip := interpreter.PasteClipboard{}
+	entry, ok := e.clipboardRegister.Paste()
+	clip.Value, clip.Linewise, clip.Ok = entry.Value, entry.Linewise, ok
+	actions := interpreter.ProcessNormal(cmd, e.table, pos, clip)
+	e.dispatchLocked(toExecutorActions(actions)...)
 	e.mu.Unlock()
 	return true
 }
 
-// Dispatch performs an already-resolved Action — the entry point for any
-// producer that isn't first resolving against live Editor state the way
-// interpreter.ProcessNormal does (e.g. a future LSP-driven edit, or a
-// plugin/Lua call constructing an Action directly — see
-// DESIGN_KEY_PIPELINE.md's "Decoupled by shape, not by sender"). Keypress-
-// driven Actions go through handleNormalModeKey's own locked block instead
-// of this, since resolving against e.table/cursor and applying the result
-// need to be one atomic section — see its comment.
-func (e *Editor) Dispatch(action executor.Action) {
+// toExecutorActions converts a Processor's []interpreter.Action into the
+// []executor.Action dispatchLocked needs — a plain loop, not a cast, since
+// interpreter.Action and executor.Action are deliberately separate named
+// interface types with identical method sets (see "Decoupled by shape,
+// not by sender" — neither package imports the other). Editor is the one
+// place that legitimately knows about both, so the bridge lives here.
+func toExecutorActions(actions []interpreter.Action) []executor.Action {
+	out := make([]executor.Action, len(actions))
+	for i, a := range actions {
+		out[i] = a
+	}
+	return out
+}
+
+// Dispatch performs one or more already-resolved Actions, in order — the
+// entry point for any producer that isn't first resolving against live
+// Editor state the way interpreter.ProcessNormal does (e.g. a future
+// LSP-driven edit, or a plugin/Lua call constructing an Action directly —
+// see DESIGN_KEY_PIPELINE.md's "Decoupled by shape, not by sender").
+// Keypress-driven Actions go through handleNormalModeKey's own locked
+// block instead of this, since resolving against e.table/cursor and
+// applying the result need to be one atomic section — see its comment.
+func (e *Editor) Dispatch(actions ...executor.Action) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.dispatchLocked(action)
+	e.dispatchLocked(actions...)
 }
 
 // dispatchLocked is executor.Dispatch wrapped for callers that already
-// hold e.mu. Caller must already hold e.mu.
-func (e *Editor) dispatchLocked(action executor.Action) {
-	if action == nil {
-		return
+// hold e.mu, applying each action in order (e.g. Change is delete-then-
+// enter-Insert; Paste-after is move-then-insert — see
+// interpreter.ProcessNormal's doc comment). Caller must already hold e.mu.
+func (e *Editor) dispatchLocked(actions ...executor.Action) {
+	for _, action := range actions {
+		if action == nil {
+			continue
+		}
+		executor.Dispatch(action, lockedEditorView{e})
 	}
-	executor.Dispatch(action, lockedEditorView{e})
 }
 
 // lockedEditorView is internal/executor's Editor interface, satisfied by
@@ -177,6 +199,27 @@ func (v lockedEditorView) DeleteRange(rng offset.TextRange) {
 		newOffset = v.e.table.Len()
 	}
 	v.e.moveCursorToLocked(newOffset, piecetable.Edit{Offset: rng.Start, OldLength: rng.Length})
+}
+
+// DeleteRangeWithRegister is DeleteRange plus storing the range's text
+// into register first — real vim's d/c both update the register they're
+// given (here, always the unnamed register plus the named one for the
+// RegisterType passed in), p/P then reads from the unnamed register.
+// linewise is recorded on the stored entry so a later paste knows whether
+// to splice charwise or insert as a fresh line.
+func (v lockedEditorView) DeleteRangeWithRegister(rng offset.TextRange, register clipboardregister.RegisterType, linewise bool) {
+	text := string(v.e.table.GetRange(rng.Start, rng.Start+rng.Length))
+	v.e.clipboardRegister.StoreRegisterValue(text, register, linewise)
+	v.DeleteRange(rng)
+}
+
+// YankRange stores the range's text into register (plus the unnamed
+// register) and moves the cursor to its start, without touching the
+// buffer — y never mutates text, only d/c do.
+func (v lockedEditorView) YankRange(rng offset.TextRange, register clipboardregister.RegisterType, linewise bool) {
+	text := string(v.e.table.GetRange(rng.Start, rng.Start+rng.Length))
+	v.e.clipboardRegister.StoreRegisterValue(text, register, linewise)
+	v.e.moveCursorToLocked(rng.Start, piecetable.Edit{})
 }
 
 func (v lockedEditorView) Undo() bool { return v.e.undoLocked() }

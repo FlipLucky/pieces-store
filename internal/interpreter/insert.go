@@ -67,32 +67,36 @@ func (a CycleCompletionAction) Direction() int         { return a.Dir }
 // completionActive must be read under the same lock as doc/at/ctx — it
 // decides whether <Enter> confirms a completion or inserts a newline, so
 // it has to reflect the same instant the rest of the snapshot does.
-func ProcessInsert(key string, doc offset.Document, at Position, ctx RuneContext, completionActive bool) Action {
+//
+// Returns []Action for symmetry with ProcessNormal (Editor's dispatch loop
+// handles either mode's output the same way) — in practice Insert mode
+// never needs more than one.
+func ProcessInsert(key string, doc offset.Document, at Position, ctx RuneContext, completionActive bool) []Action {
 	switch key {
 	case "<Esc>":
-		return ExitInsertAction{}
+		return one(ExitInsertAction{})
 	case "<BS>":
-		return resolveBackspace(doc, at, ctx)
+		return one(resolveBackspace(doc, at, ctx))
 	case "<Enter>":
 		if completionActive {
-			return ConfirmCompletionAction{}
+			return one(ConfirmCompletionAction{})
 		}
-		return NewlineAction{}
+		return one(NewlineAction{})
 	case "<C-n>":
-		return CycleCompletionAction{Dir: 1}
+		return one(CycleCompletionAction{Dir: 1})
 	case "<C-p>":
-		return CycleCompletionAction{Dir: -1}
+		return one(CycleCompletionAction{Dir: -1})
 	case "<Left>":
-		return MoveAction{Target: offset.MoveLeft(doc, at.ByteOffset), Ok: true}
+		return one(MoveAction{Target: offset.MoveLeft(doc, at.ByteOffset), Ok: true})
 	case "<Right>":
-		return MoveAction{Target: offset.MoveRight(doc, at.ByteOffset), Ok: true}
+		return one(MoveAction{Target: offset.MoveRight(doc, at.ByteOffset), Ok: true})
 	case "<Up>":
-		return resolveLineStep(doc, at, 1, -1)
+		return one(resolveLineStep(doc, at, 1, -1))
 	case "<Down>":
-		return resolveLineStep(doc, at, 1, 1)
+		return one(resolveLineStep(doc, at, 1, 1))
 	default:
 		if runes := []rune(key); len(runes) == 1 {
-			return resolveRuneInsert(runes[0], doc, at, ctx)
+			return one(resolveRuneInsert(runes[0], doc, at, ctx))
 		}
 		return nil
 	}

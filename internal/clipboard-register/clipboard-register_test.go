@@ -6,10 +6,10 @@ import (
 )
 
 func TestAppendToRegisterPrependsNewest(t *testing.T) {
-	reg := Register{"old"}
-	appendToRegister("new", &reg)
+	reg := Register{{Value: "old"}}
+	appendToRegister(Entry{Value: "new"}, &reg)
 
-	want := Register{"new", "old"}
+	want := Register{{Value: "new"}, {Value: "old"}}
 	if !slices.Equal(reg, want) {
 		t.Errorf("appendToRegister result = %v, want %v", reg, want)
 	}
@@ -28,26 +28,26 @@ func TestAppendToVisualMode(t *testing.T) {
 			initial:      ClipboardRegister{},
 			registerType: Visual,
 			input:        []string{"first", "second", "third", "fourth"},
-			want:         Register{"fourth", "third", "second", "first"},
+			want:         Register{{Value: "fourth"}, {Value: "third"}, {Value: "second"}, {Value: "first"}},
 		},
 		{
 			name:         "test yank register",
 			initial:      ClipboardRegister{},
 			registerType: Yank,
 			input:        []string{"first", "second", "third", "fourth"},
-			want:         Register{"fourth", "third", "second", "first"},
+			want:         Register{{Value: "fourth"}, {Value: "third"}, {Value: "second"}, {Value: "first"}},
 		},
 		{
 			name:         "test delete register",
 			initial:      ClipboardRegister{},
 			registerType: Delete,
 			input:        []string{"first", "second", "third", "fourth"},
-			want:         Register{"fourth", "third", "second", "first"},
+			want:         Register{{Value: "fourth"}, {Value: "third"}, {Value: "second"}, {Value: "first"}},
 		},
 	}
 	for _, c := range cases {
 		for _, value := range c.input {
-			c.initial.StoreRegisterValue(value, c.registerType)
+			c.initial.StoreRegisterValue(value, c.registerType, false)
 		}
 		register := c.initial.getRegister(c.registerType)
 		if !(slices.Equal(c.want, *register)) {
