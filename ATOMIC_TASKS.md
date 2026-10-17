@@ -670,6 +670,75 @@ sequence (2026-10-17, after T30 was bumped ahead and T31 was added): T26
       `BACKLOG.md`), populated on every real `ExecuteCommand`/confirmed
       search. (M, ❓)
 
+## 7c. Worklog / quick-capture + mode-based markdown rendering (born from an org-mode brainstorm, 2026-10-17)
+
+Not "port org-mode" — the user doesn't want org-mode's own plugin or its
+programmability (capture-template DSL, agenda/TODO-state queries across
+files), just the one capability it happens to satisfy: frictionless
+logging/notes, sometimes project-scoped, sometimes not, without breaking
+flow. Markdown is "good enough, maybe json" — deliberately not a new data
+model. Placed right after T31/T32 (T31 stays next, already agreed) and
+ahead of section 8/9's bulk wins — "fairly high," per the user's own
+framing, but not jumping the already-committed next step. An actual
+calendar/agenda view (real org-mode territory) is explicitly deferred to a
+later stage, not scoped here.
+
+- [ ] **T40 — Checkbox toggle (`- [ ]` ↔ `- [x]`).** Small, mechanical: a
+      new Normal-mode action flipping the checkbox marker on the current
+      line, reusing existing line-range/text-replace primitives — no new
+      mechanism. Open question: which key — nothing in the existing
+      `keyengine` tables is free and obviously right for this, and this
+      codebase has no `<leader>`-style user-remappable prefix concept the
+      way nvim does, so the binding needs a deliberate pick, not a
+      default. (S, 🔧)
+- [ ] **T41 — Quick-capture / worklog command (`:Log`).** Composes
+      existing primitives rather than inventing a subsystem: open (or
+      create) a target markdown file, append a timestamped heading, jump
+      to end, drop into Insert — all through machinery that already
+      exists (`:e`'s file-load path, `piecetable.Insert`, mode switch).
+      Open design question: one global target (a new
+      `platform.NotesDir()`-style convention, mirroring the existing
+      `CacheDir`/`ConfigDir` precedent) vs. also a project-local variant
+      (`:Log` vs. `:Log local` → `./WORKLOG.md`) — "sometimes project-
+      based, sometimes not" suggests both eventually; whether both ship
+      together or global-first is the user's call.
+      **Real gap surfaced while scoping this, independent of T41 itself**:
+      `executeCommandLocked`'s `"e", "edit"` case unconditionally
+      overwrites `e.table` with the newly-opened file — no dirty-check at
+      all, unlike `:q`'s explicit `ErrUnsavedChanges` refusal. T41 would
+      walk straight into this (capture a quick note mid-edit → silently
+      discards unsaved work in the real file) — worth fixing on its own
+      before or alongside T41, not papering over it. (M, 🧠)
+- [ ] **T42 — Mode-based markdown rendering (raw in Insert, rendered in
+      Normal/Visual/Command).** The big one — a real new rendering
+      mechanism, not a quick extension of `StyledSpan`. Also resolves
+      Stage 2's still-open "is preview a narrow special-cased pane or the
+      first real multi-pane" question from a third direction nobody had
+      on the table: neither — mode-conditional rendering of the *same*
+      buffer, no separate pane at all. Three real sub-decisions once this
+      starts (not resolved here, flagged for when it's picked up):
+      (1) confirm markdown's treesitter highlight-query capture names
+      actually cover what's needed (heading level, emphasis, links) —
+      `internal/syntax` already parses markdown for indent, but its
+      *coloring* coverage is unverified; (2) a new span type that can
+      *hide* raw bytes and substitute display-only text, not just color
+      them — same "new type, don't fold into the general one" precedent
+      as `DiagnosticSpan`; (3) the exact column-math problem T28 just
+      solved reappears here — concealing raw markup changes a line's
+      on-screen width vs. its byte length, so cursor positioning and
+      hover-popup placement in both frontends need the same class of fix
+      `gutterWidth` just required, except harder (the gutter was one
+      constant per-line offset; conceal width varies per span). Expect
+      this to split into its own multi-task arc once started, the way
+      `:s///` (T13-T15) and the pipeline (T18-T21) did. (L, 🧠 — yours to
+      drive, real design surface)
+
+Deferred, not a task (per the user's own "that's a feature for later"):
+since this codebase owns its own treesitter integration rather than
+borrowing someone else's grammar bundle, a worklog entry's structured
+metadata (JSON frontmatter) and prose body (markdown) could theoretically
+render through one combined view. Just a forward-pointer — no scoping yet.
+
 ## 8. Bulk Normal-mode keybinding wins (audit 2026-10-17)
 
 The user's own framing: "look up all nvim keybindings in normal mode, and
