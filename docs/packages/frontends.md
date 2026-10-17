@@ -12,6 +12,21 @@ Gio's `key.EditEvent`/`key.Event` into the same key-string vocabulary
 (windowed, scroll-follows-cursor) and color runes per `Editor.StyleSpans`/
 `Editor.DiagnosticSpans`, each owning its own `Style`→color mapping.
 
+Both also highlight live `:s///`/`:%s///` matches while the command is
+still being typed (`Editor.SubstitutePreviewRanges` — nvim's own
+"inccommand" preview, see [exmode](small-packages.md)'s T29 entry), with a
+shared highlight color (`#515c7e`, Tokyo Night's visual-selection shade)
+but necessarily different mechanics: `gui-base` draws every glyph itself,
+so a match is just another full-cell background fill layered underneath
+the glyph (`withSubstitutePreviewHighlight`), same non-destructive
+layering as its own diagnostic underline. `tui-base` had to grow real new
+capability for this — its tag-building `openTag` previously always
+hardcoded the background to the editor's own bg color; it now takes an
+independent background per rune, so a match keeps its syntax-color
+foreground while gaining a highlighted background, with no tradeoff
+required (unlike the diagnostic-severity-color limitation below, fg and bg
+are genuinely independent tag slots).
+
 ## Gio-specific gotchas (gui-base)
 
 Three real debugging sessions' worth of findings, worth knowing before

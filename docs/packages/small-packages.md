@@ -66,6 +66,18 @@ scope. One real capability that came along for free: Go's replacement
 string already supports `$1`/`$name` capture-group references (not vim's
 own `\1` syntax) since `regexp.ReplaceAllString` interprets them natively.
 
+Live match highlighting while typing a substitute — nvim's own
+"inccommand" preview — shipped 2026-10-17 (T29): `executeSubstituteLocked`'s
+match-finding logic was factored out into a shared
+`findSubstituteMatchesLocked`, so `Editor.SubstitutePreviewRanges()` (parses
+the in-progress `CommandBuffer` via `Parse`/`ParseSubstitute` on every
+render, silent rather than erroring on an incomplete/invalid command) and
+real execution stay in sync by construction rather than by two copies of
+the same scan. See [Front ends](frontends.md) for how each frontend
+renders the resulting highlight. The `c` (confirm) flag — real per-match
+y/n/a/q/l interactivity — is a deliberate, queued follow-up
+(`ATOMIC_TASKS.md`'s T30), not done yet.
+
 ## Depends on
 
 Each other, minimally: `langdetect` and `autopairs` depend only on

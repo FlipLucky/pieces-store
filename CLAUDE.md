@@ -871,6 +871,29 @@ and: this feels nice"). First item done, the other two queued
   from the project's earliest prototype phase, noticed and flagged by the
   user directly ("the editor still starts with hello world"). Both now
   start with an empty buffer, like real vim/nvim.
+- **T29 — live `:s///`/`:%s///` match highlighting ("inccommand"),** raised
+  directly off T13-T15's own work ("i want to highlight the code in the
+  editor when i use :s and %s, like nvim"). Scoped deliberately to
+  highlighting the matches themselves while a substitute is still being
+  typed, not previewing the replaced text in place — real nvim's fuller
+  `inccommand=nosplit` behavior, left for later if actually wanted, since
+  it would need a non-committed visual overlay edit, a bigger feature.
+  `executeSubstituteLocked`'s match-scanning logic was factored out into a
+  shared `findSubstituteMatchesLocked` so a new `Editor.SubstitutePreviewRanges()`
+  (parses the live `CommandBuffer` every render, silent — not erroring —
+  whenever it isn't yet shaped like a complete substitute) and real
+  execution can't drift apart. Rendering differs by necessity per
+  frontend: `gui-base` layers a new full-cell background fill underneath
+  each matched glyph (no toolkit limitation, same non-destructive layering
+  `withDiagnosticUnderline` already uses); `tui-base` had to actually grow
+  new capability — `openTag`'s background tag slot was previously always
+  hardcoded to the editor's own bg color, now independently settable per
+  rune so a match's syntax-color foreground survives underneath its own
+  highlighted background. Both use the same highlight color (`#515c7e`,
+  Tokyo Night's visual-selection shade) for consistency. The `c`
+  (confirm) flag itself — real per-match y/n/a/q/l interactivity, not just
+  a highlight — is queued as a deliberate follow-up (`ATOMIC_TASKS.md`'s
+  T30) that reuses this same preview machinery rather than a parallel one.
 
 ## Module & toolchain
 

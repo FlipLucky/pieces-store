@@ -15,6 +15,7 @@ import (
 
 	"github.com/fliplucky/pieces-store/internal/exmode"
 	"github.com/fliplucky/pieces-store/internal/offset"
+	"github.com/fliplucky/pieces-store/internal/types"
 )
 
 var (
@@ -49,6 +50,38 @@ func (e *Editor) executeSubstituteLocked(cmd exmode.Command) error {
 	}
 	global := strings.Contains(sub.Flags, "g")
 
+	matches := e.findSubstituteMatchesLocked(re, global, cmd.WholeBuffer)
+	if len(matches) == 0 {
+		return ErrPatternNotFound
+	}
+	edits := make([]substituteEdit, len(matches))
+	for i, m := range matches {
+		// re.ReplaceAllString, not a literal splice: Go's regexp
+		// interprets $1/$name capture-group references in the
+		// replacement automatically, applied to just this one match.
+		edits[i] = substituteEdit{Start: m.Start, End: m.End, NewText: re.ReplaceAllString(m.Text, sub.Replacement)}
+	}
+	e.applySubstituteEditsLocked(edits)
+	return nil
+}
+
+// substituteMatchLoc is one match's byte range (plus its own matched text,
+// needed to compute a replacement) within the buffer — the pure "where"
+// half of a :s/:%s command, factored out so executeSubstituteLocked and
+// SubstitutePreviewRanges (the live inccommand-style highlight, see below)
+// share one scanning pass instead of two copies of the same line-by-line
+// logic.
+type substituteMatchLoc struct {
+	Start, End int
+	Text       string
+}
+
+// findSubstituteMatchesLocked finds every match a :s/:%s command with the
+// given compiled pattern would act on — current line only by default, or
+// every line when wholeBuffer (the "%" prefix); only the first match per
+// line unless global. Caller must already hold e.mu (a read lock suffices
+// — this never mutates the table).
+func (e *Editor) findSubstituteMatchesLocked(re *regexp.Regexp, global, wholeBuffer bool) []substituteMatchLoc {
 	fullText := e.table.CombinePieces()
 	lines := strings.Split(fullText, "\n")
 	starts := make([]int, len(lines))
@@ -59,14 +92,14 @@ func (e *Editor) executeSubstituteLocked(cmd exmode.Command) error {
 	}
 
 	lineIndices := []int{offset.ByteOffsetToPosition(e.table, e.cursor.ByteOffset).Row}
-	if cmd.WholeBuffer {
+	if wholeBuffer {
 		lineIndices = make([]int, len(lines))
 		for i := range lines {
 			lineIndices[i] = i
 		}
 	}
 
-	var edits []substituteEdit
+	var matches []substituteMatchLoc
 	for _, idx := range lineIndices {
 		if idx < 0 || idx >= len(lines) {
 			continue
@@ -81,20 +114,53 @@ func (e *Editor) executeSubstituteLocked(cmd exmode.Command) error {
 			locs = [][]int{loc}
 		}
 		for _, loc := range locs {
-			matchText := line[loc[0]:loc[1]]
-			// re.ReplaceAllString, not a literal splice: Go's regexp
-			// interprets $1/$name capture-group references in the
-			// replacement automatically, applied to just this one match.
-			newText := re.ReplaceAllString(matchText, sub.Replacement)
-			edits = append(edits, substituteEdit{Start: base + loc[0], End: base + loc[1], NewText: newText})
+			matches = append(matches, substituteMatchLoc{Start: base + loc[0], End: base + loc[1], Text: line[loc[0]:loc[1]]})
 		}
 	}
+	return matches
+}
 
-	if len(edits) == 0 {
-		return ErrPatternNotFound
+// SubstitutePreviewRanges returns the buffer ranges a :s/:%s command
+// currently being typed in Command mode would act on, for a frontend to
+// highlight live — nvim's own "inccommand" preview, scoped here to
+// highlighting the matches themselves rather than previewing the replaced
+// text in place (a bigger feature — it would need a non-committed, purely
+// visual overlay edit — deliberately deferred past this first pass).
+// Empty whenever the command buffer isn't even shaped like a substitute
+// yet: wrong command name, no closing delimiter typed, an empty pattern,
+// or a pattern that doesn't compile. Typing is naturally incomplete most
+// of the time, so this stays silent on all of those rather than erroring
+// on every keystroke — same as real nvim's own live preview.
+func (e *Editor) SubstitutePreviewRanges() []offset.TextRange {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.substitutePreviewRangesLocked()
+}
+
+func (e *Editor) substitutePreviewRangesLocked() []offset.TextRange {
+	if e.cursor.Mode != types.ModeCommand {
+		return nil
 	}
-	e.applySubstituteEditsLocked(edits)
-	return nil
+	cmd := exmode.Parse(e.cursor.CommandBuffer.String())
+	if cmd.Name != "s" && cmd.Name != "substitute" {
+		return nil
+	}
+	sub, ok := exmode.ParseSubstitute(cmd.Raw)
+	if !ok || sub.Pattern == "" {
+		return nil
+	}
+	re, err := regexp.Compile(sub.Pattern)
+	if err != nil {
+		return nil
+	}
+	global := strings.Contains(sub.Flags, "g")
+
+	matches := e.findSubstituteMatchesLocked(re, global, cmd.WholeBuffer)
+	ranges := make([]offset.TextRange, len(matches))
+	for i, m := range matches {
+		ranges[i] = offset.TextRange{Start: m.Start, Length: m.End - m.Start}
+	}
+	return ranges
 }
 
 // applySubstituteEditsLocked applies edits — already in ascending offset

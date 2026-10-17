@@ -184,4 +184,8 @@ list, not a gap.
 - **`:s///` has no arbitrary `N,M` line-range support** — only "current
   line" (the default) and `%` (whole buffer) exist; `c`/`i` flags are also
   unimplemented. All deliberately deferred as the next incremental step on
-  this feature, not forgotten.
+  this feature, not forgotten. (Live match highlighting while typing —
+  nvim's "inccommand" — shipped 2026-10-17, `ATOMIC_TASKS.md`'s T29; `c`'s
+  own per-match confirm-prompt highlighting is a planned follow-up that
+  reuses the same `Editor.SubstitutePreviewRanges`/highlight-rendering
+  mechanism, not a separate design.)

@@ -474,6 +474,68 @@ user as cursor shape → command completion → line numbers
       frontends need to read it every render). (L, 🧠 — real design
       surface, a good one to scope together rather than hand off whole)
 
+## 7. Live `:s///` match highlighting — "inccommand" (2026-10-17)
+
+Raised directly off the back of T13-T15's `:s///`/`:%s///` work ("i want
+to highlight the code in the editor when i use :s and %s, like nvim").
+Scoped via an explicit choice between nvim's two related "highlight while
+using :s" behaviors — the live-preview-while-typing one now, the `c`
+flag's own per-match confirm-prompt highlighting later, as a deliberate
+follow-up rather than both at once.
+
+- [x] **T29 — Live preview highlighting while typing `:s`/`:%s`.** Done
+      2026-10-17. Scoped deliberately to highlighting the matches
+      themselves, not previewing the replaced text in place (nvim's full
+      `inccommand=nosplit` behavior) — that would need a non-committed,
+      purely visual overlay edit, a bigger feature left for if it's
+      actually wanted later. `executeSubstituteLocked`'s line-scanning
+      logic (current-line-only by default, every line on `%`, first match
+      per line unless `g`) was factored out into a new shared
+      `findSubstituteMatchesLocked` so execution and preview can't drift
+      apart — one `substituteMatchLoc{Start,End,Text}` scan feeds both,
+      not two copies of the same logic. New `Editor.SubstitutePreviewRanges()
+      []offset.TextRange`: parses the live `CommandBuffer` via
+      `exmode.Parse`/`ParseSubstitute` on every render, stays silent
+      (returns nil, never errors) whenever the buffer isn't even shaped
+      like a complete substitute yet — no closing delimiter, empty
+      pattern, or a pattern that doesn't compile as RE2 — since typing is
+      naturally incomplete most of the time and real nvim behaves the
+      same way. New `viewmanager.SubstitutePreviewContains`/
+      `SubstitutePreviewRangesForRange` reuse `offset.TextRange` directly
+      rather than a new span type (no metadata beyond "this is a live
+      match" to carry, unlike `StyledSpan`'s `Style` or `DiagnosticSpan`'s
+      `Style`+`Message`). Rendering differs structurally per frontend:
+      `gui-base` draws every glyph itself, so a match gets a new
+      `withSubstitutePreviewHighlight` full-cell background fill layered
+      underneath whatever the cell already draws (its own syntax color,
+      plus any diagnostic underline) — no toolkit limitation there, same
+      non-destructive layering `withDiagnosticUnderline` already
+      established. `tui-base` had to grow a real capability it didn't
+      have before: `openTag`'s background was previously always hardcoded
+      to the editor's own bg color, so a match now gets its own
+      background slot in the tag (`#515c7e`, Tokyo Night's own visual-
+      selection shade, kept the same in both frontends for consistency)
+      while keeping its syntax-color foreground — unlike the diagnostic-
+      severity-color limitation (`docs/packages/small-packages.md`'s
+      `exmode` entry), there's no real constraint here forcing a tradeoff,
+      since foreground and background are independent tag slots. Verified
+      end-to-end at the `Editor` level (parses partial/invalid input
+      silently, respects current-line/`%`/`g` scope) and at the rendering
+      level (`tui-base`'s `styledLineText` tests cover highlight-over-
+      plain-text and highlight-over-keyword-color). (M, 🤖)
+- [ ] **T30 — The `c` (confirm) flag.** Walks each match one at a time,
+      asking y/n/a/q/l before deciding — real per-match interactivity, not
+      just a highlight. Reuses T29's `findSubstituteMatchesLocked`/
+      `SubstitutePreviewRanges` machinery for "where's the current
+      candidate" rather than a new scan; the new part is the confirm-
+      prompt state machine itself (something `Cursor`-level, similar in
+      shape to `HoverState`/`RegisterOverview` — not a real `Mode`) plus
+      wiring a highlight specifically for "the one candidate currently
+      being asked about," distinct from "all matches this command would
+      touch." (M, 🧠 — real interaction design: where the y/n/a/q/l prompt
+      itself shows in each frontend is worth scoping deliberately, not
+      defaulted)
+
 ## Longer horizon — browse, don't start yet
 
 - **Visual mode** — real design work (operators act directly on a

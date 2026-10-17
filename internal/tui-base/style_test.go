@@ -9,7 +9,7 @@ import (
 )
 
 func TestStyledLineTextNoSpansIsUnchanged(t *testing.T) {
-	got := styledLineText("hello world", 0, nil, nil)
+	got := styledLineText("hello world", 0, nil, nil, nil)
 	if got != "hello world" {
 		t.Errorf("styledLineText with no spans = %q, want unchanged %q", got, "hello world")
 	}
@@ -19,7 +19,7 @@ func TestStyledLineTextAppliesSpanColor(t *testing.T) {
 	spans := []viewmanager.StyledSpan{
 		{TextRange: offset.TextRange{Start: 6, Length: 5}, Style: types.StyleString}, // "world"
 	}
-	got := styledLineText("hello world", 0, spans, nil)
+	got := styledLineText("hello world", 0, spans, nil, nil)
 	want := "hello [#9ece6a:#1a1b26:U]w[#a9b1d6:#1a1b26:U][#9ece6a:#1a1b26:U]o[#a9b1d6:#1a1b26:U][#9ece6a:#1a1b26:U]r[#a9b1d6:#1a1b26:U][#9ece6a:#1a1b26:U]l[#a9b1d6:#1a1b26:U][#9ece6a:#1a1b26:U]d[#a9b1d6:#1a1b26:U]"
 	if got != want {
 		t.Errorf("styledLineText with span = %q, want %q", got, want)
@@ -34,7 +34,7 @@ func TestStyledLineTextRespectsMultiByteRuneOffsets(t *testing.T) {
 	spans := []viewmanager.StyledSpan{
 		{TextRange: offset.TextRange{Start: 3, Length: 1}, Style: types.StyleNumber},
 	}
-	got := styledLineText(line, 0, spans, nil)
+	got := styledLineText(line, 0, spans, nil, nil)
 	want := "h" + "é" + "[#ff9e64:#1a1b26:U]l[#a9b1d6:#1a1b26:U]" + "lo"
 	if got != want {
 		t.Errorf("styledLineText multi-byte = %q, want %q", got, want)
@@ -56,7 +56,7 @@ func TestStyledLineTextDiagnosticOverridesColorToSeverityAndUnderlines(t *testin
 	diagnostics := []viewmanager.DiagnosticSpan{
 		{TextRange: offset.TextRange{Start: 0, Length: 5}, Style: types.StyleDiagnosticError},
 	}
-	got := styledLineText("hello", 0, spans, diagnostics)
+	got := styledLineText("hello", 0, spans, diagnostics, nil)
 	want := "[#f7768e:#1a1b26:u]h[#a9b1d6:#1a1b26:U][#f7768e:#1a1b26:u]e[#a9b1d6:#1a1b26:U][#f7768e:#1a1b26:u]l[#a9b1d6:#1a1b26:U][#f7768e:#1a1b26:u]l[#a9b1d6:#1a1b26:U][#f7768e:#1a1b26:u]o[#a9b1d6:#1a1b26:U]"
 	if got != want {
 		t.Errorf("styledLineText diagnosed keyword = %q, want %q (severity color + underline, real color visible)", got, want)
@@ -67,10 +67,41 @@ func TestStyledLineTextDiagnosticAloneUsesSeverityColorUnderlined(t *testing.T) 
 	diagnostics := []viewmanager.DiagnosticSpan{
 		{TextRange: offset.TextRange{Start: 0, Length: 2}, Style: types.StyleDiagnosticWarning},
 	}
-	got := styledLineText("hi", 0, nil, diagnostics)
+	got := styledLineText("hi", 0, nil, diagnostics, nil)
 	want := "[#e0af68:#1a1b26:u]h[#a9b1d6:#1a1b26:U][#e0af68:#1a1b26:u]i[#a9b1d6:#1a1b26:U]"
 	if got != want {
 		t.Errorf("styledLineText plain-text diagnostic = %q, want %q", got, want)
+	}
+}
+
+// TestStyledLineTextSubstitutePreviewHighlightsOverPlainText documents the
+// live :s/:%s preview highlight (nvim's "inccommand"): a matched rune with
+// no syntax color of its own still gets a tag emitted, purely to carry the
+// highlighted background.
+func TestStyledLineTextSubstitutePreviewHighlightsOverPlainText(t *testing.T) {
+	preview := []offset.TextRange{{Start: 0, Length: 2}}
+	got := styledLineText("hi there", 0, nil, nil, preview)
+	want := "[#a9b1d6:#515c7e:U]h[#a9b1d6:#1a1b26:U][#a9b1d6:#515c7e:U]i[#a9b1d6:#1a1b26:U] there"
+	if got != want {
+		t.Errorf("styledLineText substitute preview = %q, want %q", got, want)
+	}
+}
+
+// TestStyledLineTextSubstitutePreviewKeepsSyntaxColor documents that the
+// preview highlight layers on top of a span's own color rather than
+// replacing it — unlike the diagnostic-severity-color override above,
+// which is a real, documented tview limitation; this one has no such
+// constraint, since a background tag slot is independent of the
+// foreground color slot in the same tag.
+func TestStyledLineTextSubstitutePreviewKeepsSyntaxColor(t *testing.T) {
+	spans := []viewmanager.StyledSpan{
+		{TextRange: offset.TextRange{Start: 0, Length: 2}, Style: types.StyleKeyword},
+	}
+	preview := []offset.TextRange{{Start: 0, Length: 2}}
+	got := styledLineText("if", 0, spans, nil, preview)
+	want := "[#bb9af7:#515c7e:U]i[#a9b1d6:#1a1b26:U][#bb9af7:#515c7e:U]f[#a9b1d6:#1a1b26:U]"
+	if got != want {
+		t.Errorf("styledLineText substitute preview over keyword = %q, want %q", got, want)
 	}
 }
 

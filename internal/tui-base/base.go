@@ -8,6 +8,7 @@ import (
 	"github.com/rivo/tview"
 
 	"github.com/fliplucky/pieces-store/internal/editor"
+	"github.com/fliplucky/pieces-store/internal/offset"
 	"github.com/fliplucky/pieces-store/internal/types"
 	"github.com/fliplucky/pieces-store/internal/viewmanager"
 )
@@ -43,6 +44,13 @@ const (
 	tokyoBgHex = "#1a1b26"
 	tokyoFgHex = "#a9b1d6"
 )
+
+// substitutePreviewBgHex is the background a live :s/:%s match gets while
+// its command is still being typed (see styledLineText) — Tokyo Night's
+// own muted slate-blue, the same shade its visual-selection highlight
+// uses, so a match reads as "selected" rather than introducing an
+// unrelated new accent color to the palette.
+const substitutePreviewBgHex = "#515c7e"
 
 // tviewStyleColor returns the tcell/tview color-tag value for a syntax
 // Style, or ("", false) for types.StyleNone (nothing to wrap, same as an
@@ -110,10 +118,12 @@ func diagnosticColor(style types.Style) (string, bool) {
 const resetTag = "[" + tokyoFgHex + ":" + tokyoBgHex + ":U]"
 
 // openTag builds one rune's full style tag: its color (or the default
-// text color if it has none) plus an explicit underline attribute state
-// — always stated explicitly, for the same sticky-attribute reason
-// resetTag is.
-func openTag(color string, underline bool) string {
+// text color if it has none), an explicit background (normally the
+// default editor background, but substitutePreviewBgHex for a live
+// :s/:%s match — see styledLineText), and an explicit underline attribute
+// state — all three always stated explicitly, for the same sticky-
+// attribute reason resetTag is.
+func openTag(color, bg string, underline bool) string {
 	if color == "" {
 		color = tokyoFgHex
 	}
@@ -121,15 +131,20 @@ func openTag(color string, underline bool) string {
 	if underline {
 		attr = "u"
 	}
-	return fmt.Sprintf("[%s:%s:%s]", color, tokyoBgHex, attr)
+	return fmt.Sprintf("[%s:%s:%s]", color, bg, attr)
 }
 
 // styledLineText renders one line as a tview color/underline-tagged
 // string: a syntax span colors the rune; a diagnostic span underlines it —
 // independently, so a diagnosed keyword keeps its keyword color and gains
-// an underline rather than losing its color to solid red/yellow. Identical
-// output to before diagnostics existed when spans and diagnostics are both
-// empty.
+// an underline rather than losing its color to solid red/yellow. A live
+// :s/:%s match (substitutePreview, while that command is still being
+// typed — see Editor.SubstitutePreviewRanges) gets a highlighted
+// background instead, layered on top of whatever color/underline the rune
+// already has, the same way nvim's own "inccommand" preview doesn't hide
+// a match's existing syntax color. Identical output to before diagnostics
+// or preview highlighting existed when spans/diagnostics/substitutePreview
+// are all empty.
 //
 // The cursor's own cell used to be drawn here too, as an inverted-color
 // character simulating a block cursor. That's gone (2026-10-17) in favor
@@ -137,7 +152,7 @@ func openTag(color string, underline bool) string {
 // can actually change shape between Normal/Visual/Command's block and
 // Insert's bar — tview's tag-based inversion had no way to express "bar"
 // at all, only ever a solid block regardless of mode.
-func styledLineText(line string, lineStart int, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan) string {
+func styledLineText(line string, lineStart int, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, substitutePreview []offset.TextRange) string {
 	runes := []rune(line)
 	var b strings.Builder
 	byteOffset := 0
@@ -159,8 +174,13 @@ func styledLineText(line string, lineStart int, spans []viewmanager.StyledSpan, 
 			color = diagColor
 			hasColor = true
 		}
+		bg := tokyoBgHex
+		if viewmanager.SubstitutePreviewContains(substitutePreview, abs) {
+			bg = substitutePreviewBgHex
+			hasColor = true // force a tag even over an otherwise-plain rune, so the background still shows
+		}
 		if hasColor || underline {
-			b.WriteString(openTag(color, underline))
+			b.WriteString(openTag(color, bg, underline))
 			b.WriteRune(r)
 			b.WriteString(resetTag)
 		} else {
@@ -275,19 +295,21 @@ func Boot(ed *editor.Editor) error {
 		slice := ed.Viewport(cursor.Row, 1, viewportRadius)
 		spans := ed.StyleSpans(slice.StartOffset, slice.EndOffset)
 		diagnosticSpans := ed.DiagnosticSpans(slice.StartOffset, slice.EndOffset)
+		substitutePreview := ed.SubstitutePreviewRanges()
 
 		var formattedLines []string
 		for i, line := range slice.Lines {
 			lineStart := slice.LineOffsets[i]
 			lineSpans := viewmanager.SpansForRange(spans, lineStart, lineStart+len(line))
 			lineDiagnostics := viewmanager.DiagnosticSpansForRange(diagnosticSpans, lineStart, lineStart+len(line))
+			linePreview := viewmanager.SubstitutePreviewRangesForRange(substitutePreview, lineStart, lineStart+len(line))
 
 			var rendered string
 			switch {
-			case len(lineSpans) == 0 && len(lineDiagnostics) == 0:
+			case len(lineSpans) == 0 && len(lineDiagnostics) == 0 && len(linePreview) == 0:
 				rendered = line
 			default:
-				rendered = styledLineText(line, lineStart, lineSpans, lineDiagnostics)
+				rendered = styledLineText(line, lineStart, lineSpans, lineDiagnostics, linePreview)
 			}
 			if msg, ok := viewmanager.DiagnosticMessageForRange(lineDiagnostics, lineStart, lineStart+len(line)); ok {
 				rendered += virtualDiagnosticText(msg)

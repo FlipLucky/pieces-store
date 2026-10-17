@@ -19,6 +19,7 @@ import (
 	"gioui.org/widget/material"
 
 	"github.com/fliplucky/pieces-store/internal/editor"
+	"github.com/fliplucky/pieces-store/internal/offset"
 	"github.com/fliplucky/pieces-store/internal/types"
 	"github.com/fliplucky/pieces-store/internal/viewmanager"
 )
@@ -111,6 +112,7 @@ func (g *GioApp) Run() {
 				slice := g.editor.Viewport(g.topRow, visibleRows, viewportMargin)
 				spans := g.editor.StyleSpans(slice.StartOffset, slice.EndOffset)
 				diagnostics := g.editor.DiagnosticSpans(slice.StartOffset, slice.EndOffset)
+				substitutePreview := g.editor.SubstitutePreviewRanges()
 
 				layout.Stack{}.Layout(gtx,
 					layout.Expanded(func(gtx layout.Context) layout.Dimensions {
@@ -119,7 +121,7 @@ func (g *GioApp) Run() {
 							Alignment: layout.Start,
 						}.Layout(gtx,
 							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-								return renderBody(gtx, g.theme, slice, spans, diagnostics, cursor)
+								return renderBody(gtx, g.theme, slice, spans, diagnostics, substitutePreview, cursor)
 							}),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								return renderCompletionPopup(gtx, g.theme, cursor)
@@ -276,14 +278,14 @@ func followCursor(topRow, cursorRow, visibleRows int) int {
 
 // renderBody lays out exactly the lines in slice — never the whole
 // document — one Flex row per line.
-func renderBody(gtx layout.Context, theme *material.Theme, slice viewmanager.Slice, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, cursor editor.Cursor) layout.Dimensions {
+func renderBody(gtx layout.Context, theme *material.Theme, slice viewmanager.Slice, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, substitutePreview []offset.TextRange, cursor editor.Cursor) layout.Dimensions {
 	children := make([]layout.FlexChild, len(slice.Lines))
 	for i, line := range slice.Lines {
 		absRow := slice.StartRow + i
 		line := line
 		lineStart := slice.LineOffsets[i]
 		children[i] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return renderLine(gtx, theme, line, absRow, lineStart, spans, diagnostics, cursor)
+			return renderLine(gtx, theme, line, absRow, lineStart, spans, diagnostics, substitutePreview, cursor)
 		})
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
@@ -307,21 +309,22 @@ func virtualDiagnosticText(message string) string {
 	return "  // " + message
 }
 
-func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow, lineStart int, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, cursor editor.Cursor) layout.Dimensions {
+func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow, lineStart int, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, substitutePreview []offset.TextRange, cursor editor.Cursor) layout.Dimensions {
 	isCursorLine := absRow == cursor.Row
 	lineSpans := viewmanager.SpansForRange(spans, lineStart, lineStart+len(line))
 	lineDiagnostics := viewmanager.DiagnosticSpansForRange(diagnostics, lineStart, lineStart+len(line))
+	linePreview := viewmanager.SubstitutePreviewRangesForRange(substitutePreview, lineStart, lineStart+len(line))
 
 	var lineContent layout.Widget
 	switch {
-	case !isCursorLine && len(lineSpans) == 0 && len(lineDiagnostics) == 0:
+	case !isCursorLine && len(lineSpans) == 0 && len(lineDiagnostics) == 0 && len(linePreview) == 0:
 		lineContent = func(gtx layout.Context) layout.Dimensions {
 			lbl := material.Label(theme, theme.TextSize, line)
 			lbl.Color = theme.Palette.Fg
 			return lbl.Layout(gtx)
 		}
 	default:
-		lineContent = renderStyledRunes(theme, line, lineStart, lineSpans, lineDiagnostics, isCursorLine, cursor)
+		lineContent = renderStyledRunes(theme, line, lineStart, lineSpans, lineDiagnostics, linePreview, isCursorLine, cursor)
 	}
 
 	message, hasMessage := viewmanager.DiagnosticMessageForRange(lineDiagnostics, lineStart, lineStart+len(line))
@@ -340,9 +343,10 @@ func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow, 
 
 // renderStyledRunes lays a line out rune by rune — needed whenever it's
 // the cursor's line (exactly one cell styled as the cursor), has styled
-// spans, has diagnostics, or any combination; a plain line takes the
-// cheaper single-Label path in renderLine instead.
-func renderStyledRunes(theme *material.Theme, line string, lineStart int, lineSpans []viewmanager.StyledSpan, lineDiagnostics []viewmanager.DiagnosticSpan, isCursorLine bool, cursor editor.Cursor) layout.Widget {
+// spans, has diagnostics, has a live :s/:%s preview match, or any
+// combination; a plain line takes the cheaper single-Label path in
+// renderLine instead.
+func renderStyledRunes(theme *material.Theme, line string, lineStart int, lineSpans []viewmanager.StyledSpan, lineDiagnostics []viewmanager.DiagnosticSpan, linePreview []offset.TextRange, isCursorLine bool, cursor editor.Cursor) layout.Widget {
 	runes := []rune(line)
 	count := len(runes)
 	if isCursorLine && cursor.Col >= count {
@@ -383,10 +387,13 @@ func renderStyledRunes(theme *material.Theme, line string, lineStart int, lineSp
 			if charIndex < len(runes) {
 				style = viewmanager.StyleAt(lineSpans, lineStart+byteOffsets[charIndex])
 			}
-			return withDiagnosticUnderline(gtx, theme, diagStyle, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Label(theme, theme.TextSize, charStr)
-				lbl.Color = styleColor(theme, style)
-				return lbl.Layout(gtx)
+			highlighted := charIndex < len(runes) && viewmanager.SubstitutePreviewContains(linePreview, lineStart+byteOffsets[charIndex])
+			return withSubstitutePreviewHighlight(gtx, highlighted, func(gtx layout.Context) layout.Dimensions {
+				return withDiagnosticUnderline(gtx, theme, diagStyle, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(theme, theme.TextSize, charStr)
+					lbl.Color = styleColor(theme, style)
+					return lbl.Layout(gtx)
+				})
 			})
 		})
 	}
@@ -419,6 +426,34 @@ func withDiagnosticUnderline(gtx layout.Context, theme *material.Theme, diagStyl
 			paint.PaintOp{}.Add(gtx.Ops)
 			return layout.Dimensions{Size: size}
 		}),
+	)
+}
+
+// substitutePreviewBg is the background a live :s/:%s match gets while its
+// command is still being typed in Command mode — nvim's own "inccommand"
+// preview, scoped here to highlighting the matches themselves (see
+// Editor.SubstitutePreviewRanges). The same muted slate-blue tui-base
+// uses (#515c7e, Tokyo Night's own visual-selection shade), kept
+// consistent across both frontends rather than each picking its own.
+var substitutePreviewBg = color.NRGBA{R: 0x51, G: 0x5c, B: 0x7e, A: 0xff}
+
+// withSubstitutePreviewHighlight draws a full-cell background fill behind
+// content when highlighted, layered underneath whatever the cell already
+// draws (its own syntax color, plus any diagnostic underline) rather than
+// replacing it — the same non-destructive layering withDiagnosticUnderline
+// already uses, just a full-cell fill instead of a bottom-edge strip.
+func withSubstitutePreviewHighlight(gtx layout.Context, highlighted bool, content func(layout.Context) layout.Dimensions) layout.Dimensions {
+	if !highlighted {
+		return content(gtx)
+	}
+	return layout.Stack{}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			defer clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops).Pop()
+			paint.ColorOp{Color: substitutePreviewBg}.Add(gtx.Ops)
+			paint.PaintOp{}.Add(gtx.Ops)
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+		layout.Stacked(content),
 	)
 }
 
