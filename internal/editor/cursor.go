@@ -121,20 +121,37 @@ type RegisterOverviewState struct {
 	Lines  []string
 }
 
+// SubstituteConfirmState is an in-progress :s///c / :%s///c confirm flow
+// (T30) — not a real Mode (same reasoning as HoverState/RegisterOverview):
+// Editor's own Mode is already back to Normal by the time this is active
+// (see internal/editor/substitute.go's confirm-flow section), and a
+// y/n/a/q/l keystroke is intercepted directly in handleNormalModeKey
+// rather than fed to keyengine. Prompt is a ready-to-display string (e.g.
+// `replace with "bar" (y/n/a/q/l)?`) — the actual match list/regexp/
+// replacement bookkeeping needed to resolve the next keystroke lives as
+// unexported Editor fields, not here, the same split
+// pendingReplace/pendingFindChar already use between "what frontends need
+// to show" and "what Editor needs to act."
+type SubstituteConfirmState struct {
+	Active bool
+	Prompt string
+}
+
 // Cursor is editor state — position, mode, the in-progress command
 // buffer, and any in-progress command-line/LSP completion or hover popup —
 // not view state. Frontends read it for rendering, but it lives here
 // because Editor owns it end-to-end.
 type Cursor struct {
-	ByteOffset       int
-	Row              int
-	Col              int
-	Mode             types.Mode
-	CommandBuffer    CommandBuffer
-	Completion       CompletionState
-	LSPCompletion    LSPCompletionState
-	Hover            HoverState
-	RegisterOverview RegisterOverviewState
+	ByteOffset        int
+	Row               int
+	Col               int
+	Mode              types.Mode
+	CommandBuffer     CommandBuffer
+	Completion        CompletionState
+	LSPCompletion     LSPCompletionState
+	Hover             HoverState
+	RegisterOverview  RegisterOverviewState
+	SubstituteConfirm SubstituteConfirmState
 }
 
 func NewCursor() *Cursor {

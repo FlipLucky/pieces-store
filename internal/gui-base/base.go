@@ -817,6 +817,17 @@ func renderStatusBar(gtx layout.Context, theme *material.Theme, ed *editor.Edito
 			return layout.Dimensions{Size: gtx.Constraints.Min}
 		}),
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			// Takes priority over the normal status line the same way
+			// Command mode's own buffer display does — Editor's Mode is
+			// already back to Normal while a :s///c confirm flow is
+			// active (see substitute.go's confirm-flow section), so this
+			// has to be checked ahead of (not alongside) ModeCommand.
+			if cursor.SubstituteConfirm.Active {
+				lbl := material.Label(theme, theme.TextSize, " "+cursor.SubstituteConfirm.Prompt)
+				lbl.Color = color.NRGBA{R: 0xe0, G: 0xaf, B: 0x68, A: 0xff} // Yellow, matches Normal mode's own color
+				return lbl.Layout(gtx)
+			}
+
 			if cursor.Mode == types.ModeCommand {
 				lbl := material.Label(theme, theme.TextSize, fmt.Sprintf(" :%s", cursor.CommandBuffer))
 				lbl.Color = theme.Palette.ContrastBg

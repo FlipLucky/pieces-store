@@ -265,3 +265,210 @@ func TestSubstituteWithCustomDelimiter(t *testing.T) {
 		t.Errorf("GetText() = %q, want %q", got, "/opt/bin")
 	}
 }
+
+// --- :s///c / :%s///c confirm flow (T30) ---
+
+// TestSubstituteConfirmStartsSessionAndHighlightsFirstMatch covers
+// :s///c's entry point: no edit happens yet, the buffer stays untouched,
+// but a confirm session is active and highlighting the first candidate.
+func TestSubstituteConfirmStartsSessionAndHighlightsFirstMatch(t *testing.T) {
+	e := NewEditor("foo foo foo")
+	if err := e.ExecuteCommand(":s/foo/bar/gc"); err != nil {
+		t.Fatalf("ExecuteCommand = %v, want nil", err)
+	}
+	if got := e.GetText(); got != "foo foo foo" {
+		t.Errorf("GetText() before any answer = %q, want unchanged %q", got, "foo foo foo")
+	}
+	cursor := e.GetCursor()
+	if !cursor.SubstituteConfirm.Active {
+		t.Fatal("SubstituteConfirm.Active = false, want true")
+	}
+	if want := `replace with "bar" (y/n/a/q/l)?`; cursor.SubstituteConfirm.Prompt != want {
+		t.Errorf("Prompt = %q, want %q", cursor.SubstituteConfirm.Prompt, want)
+	}
+	if got := e.SubstitutePreviewRanges(); len(got) != 1 || got[0] != (offset.TextRange{Start: 0, Length: 3}) {
+		t.Errorf("SubstitutePreviewRanges() = %v, want the first \"foo\" only", got)
+	}
+}
+
+// TestSubstituteConfirmWithoutCFlagStaysImmediate is a sanity check that
+// the non-confirm path never leaves a session active.
+func TestSubstituteConfirmWithoutCFlagStaysImmediate(t *testing.T) {
+	e := NewEditor("foo bar")
+	if err := e.ExecuteCommand(":s/foo/qux/"); err != nil {
+		t.Fatalf("ExecuteCommand = %v, want nil", err)
+	}
+	if e.GetCursor().SubstituteConfirm.Active {
+		t.Error("SubstituteConfirm.Active = true after a plain :s///, want false")
+	}
+}
+
+// TestSubstituteConfirmYReplacesEachAndAdvances covers answering "y" to
+// every candidate in turn, across the whole buffer with "g".
+func TestSubstituteConfirmYReplacesEachAndAdvances(t *testing.T) {
+	e := NewEditor("foo foo foo")
+	if err := e.ExecuteCommand(":s/foo/bar/gc"); err != nil {
+		t.Fatalf("ExecuteCommand = %v, want nil", err)
+	}
+	for i := 0; i < 3; i++ {
+		if !e.GetCursor().SubstituteConfirm.Active {
+			t.Fatalf("session ended early after %d of 3 answers", i)
+		}
+		e.HandleKey("y")
+	}
+	if e.GetCursor().SubstituteConfirm.Active {
+		t.Error("session still active after answering every candidate")
+	}
+	if got := e.GetText(); got != "bar bar bar" {
+		t.Errorf("GetText() = %q, want %q", got, "bar bar bar")
+	}
+}
+
+// TestSubstituteConfirmNSkipsWithoutReplacing covers "n" moving on without
+// touching the current candidate.
+func TestSubstituteConfirmNSkipsWithoutReplacing(t *testing.T) {
+	e := NewEditor("foo foo foo")
+	if err := e.ExecuteCommand(":s/foo/bar/gc"); err != nil {
+		t.Fatalf("ExecuteCommand = %v, want nil", err)
+	}
+	e.HandleKey("n") // skip the first
+	e.HandleKey("y") // replace the second
+	e.HandleKey("n") // skip the third
+	if got := e.GetText(); got != "foo bar foo" {
+		t.Errorf("GetText() = %q, want %q", got, "foo bar foo")
+	}
+	if e.GetCursor().SubstituteConfirm.Active {
+		t.Error("session still active after the last candidate was answered")
+	}
+}
+
+// TestSubstituteConfirmAReplacesAllRemainingWithoutAsking covers "a"
+// ending the session by applying every remaining candidate in one go.
+func TestSubstituteConfirmAReplacesAllRemainingWithoutAsking(t *testing.T) {
+	e := NewEditor("foo foo foo foo")
+	if err := e.ExecuteCommand(":s/foo/bar/gc"); err != nil {
+		t.Fatalf("ExecuteCommand = %v, want nil", err)
+	}
+	e.HandleKey("n") // skip the first — "a" must only affect what's left
+	e.HandleKey("a")
+	if e.GetCursor().SubstituteConfirm.Active {
+		t.Error("session still active after \"a\"")
+	}
+	if got := e.GetText(); got != "foo bar bar bar" {
+		t.Errorf("GetText() = %q, want %q", got, "foo bar bar bar")
+	}
+}
+
+// TestSubstituteConfirmLReplacesOneAndStops covers "l" ("last") applying
+// only the current candidate, then ending the session — later candidates
+// stay untouched, unlike "a".
+func TestSubstituteConfirmLReplacesOneAndStops(t *testing.T) {
+	e := NewEditor("foo foo foo")
+	if err := e.ExecuteCommand(":s/foo/bar/gc"); err != nil {
+		t.Fatalf("ExecuteCommand = %v, want nil", err)
+	}
+	e.HandleKey("l")
+	if e.GetCursor().SubstituteConfirm.Active {
+		t.Error("session still active after \"l\"")
+	}
+	if got := e.GetText(); got != "bar foo foo" {
+		t.Errorf("GetText() = %q, want %q", got, "bar foo foo")
+	}
+}
+
+// TestSubstituteConfirmQEndsSessionWithoutReplacing covers "q" quitting
+// outright, leaving even the current candidate untouched.
+func TestSubstituteConfirmQEndsSessionWithoutReplacing(t *testing.T) {
+	e := NewEditor("foo foo foo")
+	if err := e.ExecuteCommand(":s/foo/bar/gc"); err != nil {
+		t.Fatalf("ExecuteCommand = %v, want nil", err)
+	}
+	e.HandleKey("q")
+	if e.GetCursor().SubstituteConfirm.Active {
+		t.Error("session still active after \"q\"")
+	}
+	if got := e.GetText(); got != "foo foo foo" {
+		t.Errorf("GetText() = %q, want unchanged %q", got, "foo foo foo")
+	}
+}
+
+// TestSubstituteConfirmEscEndsSessionWithoutReplacing covers <Esc> as a
+// synonym for "q".
+func TestSubstituteConfirmEscEndsSessionWithoutReplacing(t *testing.T) {
+	e := NewEditor("foo foo foo")
+	if err := e.ExecuteCommand(":s/foo/bar/gc"); err != nil {
+		t.Fatalf("ExecuteCommand = %v, want nil", err)
+	}
+	e.HandleKey("<Esc>")
+	if e.GetCursor().SubstituteConfirm.Active {
+		t.Error("session still active after <Esc>")
+	}
+	if got := e.GetText(); got != "foo foo foo" {
+		t.Errorf("GetText() = %q, want unchanged %q", got, "foo foo foo")
+	}
+}
+
+// TestSubstituteConfirmYIsInterceptedNotYanked is the real reason this
+// needs its own dispatch.go interception: "y" is also a real Normal-mode
+// verb (yank). If the confirm session failed to intercept it, this would
+// instead try to yank starting at the match and leave the buffer
+// unmodified — this test would see "foo foo foo" (no replacement)
+// instead of the real "bar bar bar" if that regression ever reappeared.
+func TestSubstituteConfirmYIsInterceptedNotYanked(t *testing.T) {
+	e := NewEditor("foo foo foo")
+	if err := e.ExecuteCommand(":s/foo/bar/gc"); err != nil {
+		t.Fatalf("ExecuteCommand = %v, want nil", err)
+	}
+	e.HandleKey("y")
+	e.HandleKey("y")
+	e.HandleKey("y")
+	if got := e.GetText(); got != "bar bar bar" {
+		t.Errorf("GetText() = %q, want %q (an intercepted \"y\" must replace, not yank)", got, "bar bar bar")
+	}
+}
+
+// TestSubstituteConfirmOffsetsShiftAfterLengthChangingReplacement covers
+// the real correctness risk in this feature: matches are located against
+// the pre-edit text, so once an earlier replacement changes the text's
+// length, every later candidate's offset must shift by that delta or it
+// will land on the wrong bytes.
+func TestSubstituteConfirmOffsetsShiftAfterLengthChangingReplacement(t *testing.T) {
+	e := NewEditor("a a a")
+	if err := e.ExecuteCommand(":s/a/bbb/gc"); err != nil {
+		t.Fatalf("ExecuteCommand = %v, want nil", err)
+	}
+	e.HandleKey("y")
+	e.HandleKey("y")
+	e.HandleKey("y")
+	if got := e.GetText(); got != "bbb bbb bbb" {
+		t.Errorf("GetText() = %q, want %q", got, "bbb bbb bbb")
+	}
+}
+
+// TestSubstituteConfirmWholeBufferCrossesLines covers :%s///c walking
+// matches across every line in the buffer, not just the current one.
+func TestSubstituteConfirmWholeBufferCrossesLines(t *testing.T) {
+	e := NewEditor("foo\nfoo\nfoo")
+	if err := e.ExecuteCommand(":%s/foo/bar/c"); err != nil {
+		t.Fatalf("ExecuteCommand = %v, want nil", err)
+	}
+	e.HandleKey("y")
+	e.HandleKey("n")
+	e.HandleKey("y")
+	if got := e.GetText(); got != "bar\nfoo\nbar" {
+		t.Errorf("GetText() = %q, want %q", got, "bar\nfoo\nbar")
+	}
+}
+
+// TestSubstituteConfirmPromptReflectsCaptureGroups covers the prompt text
+// showing the real, already-substituted replacement (capture groups
+// resolved), not the raw $1-style template.
+func TestSubstituteConfirmPromptReflectsCaptureGroups(t *testing.T) {
+	e := NewEditor("hello world")
+	if err := e.ExecuteCommand(`:s/(\w+) (\w+)/$2 $1/c`); err != nil {
+		t.Fatalf("ExecuteCommand = %v, want nil", err)
+	}
+	if want := `replace with "world hello" (y/n/a/q/l)?`; e.GetCursor().SubstituteConfirm.Prompt != want {
+		t.Errorf("Prompt = %q, want %q", e.GetCursor().SubstituteConfirm.Prompt, want)
+	}
+}

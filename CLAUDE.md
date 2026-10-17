@@ -905,11 +905,25 @@ and: this feels nice"). First item done, the other two queued
   rune so a match's syntax-color foreground survives underneath its own
   highlighted background. Both use the same highlight color (`#515c7e`,
   Tokyo Night's visual-selection shade) for consistency.
-- **The `c` (confirm) flag bumped ahead of T27/T28** per the user's own
-  real workflow ("i often change a word's part with %s/gc... c is already
-  a habit; %s feels incomplete without it") — see `ATOMIC_TASKS.md`'s T30,
-  not built yet, reusing T29's match-finding/highlight machinery for real
-  per-match y/n/a/q/l interactivity rather than a parallel mechanism.
+- **The `c` (confirm) flag shipped the same day**, bumped ahead of T27/T28
+  per the user's own real workflow ("i often change a word's part with
+  %s/gc... c is already a habit; %s feels incomplete without it") — see
+  `ATOMIC_TASKS.md`'s T30. Walks each match asking y/n/a/q/l, reusing T29's
+  `findSubstituteMatchesLocked` for the scan and, for highlighting, reusing
+  `SubstitutePreviewRanges` itself (it now checks a new
+  `Cursor.SubstituteConfirmState{Active, Prompt}` first and returns the
+  current candidate's range) — **zero frontend rendering changes needed**,
+  since both frontends already called that function every render. A real
+  subtlety caught by reading the actual control flow rather than assumed:
+  `executeCommandLocked` resets `Mode` to Normal right after dispatching a
+  command, so by the time a confirm session starts, the *next* keystroke
+  is already routed through `handleNormalModeKey` — which is exactly where
+  the new `y`/`n`/`a`/`q`/`l` interception needed to go, ahead of
+  `pendingReplace` (same precedence shape), since `y` is also a real
+  Normal-mode yank verb it would otherwise collide with. Verified
+  end-to-end through `ExecuteCommand`/`HandleKey` (14 cases, including a
+  dedicated regression guard proving `y` is intercepted rather than
+  falling through to yank). Both tagged builds verified clean.
 
 ## Module & toolchain
 

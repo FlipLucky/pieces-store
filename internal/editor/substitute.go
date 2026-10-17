@@ -3,18 +3,20 @@
 // per ATOMIC_TASKS.md's T13-T15: Go's own regexp syntax (RE2), not vim's
 // regex dialect (a real, deliberate divergence — no backreferences or
 // lookaround — documented rather than silently accepted, see
-// docs/packages/editor.md), and the "g" flag only; "c"/"i" and arbitrary
-// N,M line ranges are deliberately deferred, matching this file's own
-// scope exactly as originally planned.
+// docs/packages/editor.md). "i" and arbitrary N,M line ranges are
+// deliberately deferred; "g" (T13-T15) and "c" (T30, see
+// SubstituteConfirmState below) are both done.
 package editor
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 
 	"github.com/fliplucky/pieces-store/internal/exmode"
 	"github.com/fliplucky/pieces-store/internal/offset"
+	"github.com/fliplucky/pieces-store/internal/piecetable"
 	"github.com/fliplucky/pieces-store/internal/types"
 )
 
@@ -54,6 +56,12 @@ func (e *Editor) executeSubstituteLocked(cmd exmode.Command) error {
 	if len(matches) == 0 {
 		return ErrPatternNotFound
 	}
+
+	if strings.Contains(sub.Flags, "c") {
+		e.startSubstituteConfirmLocked(matches, re, sub.Replacement)
+		return nil
+	}
+
 	edits := make([]substituteEdit, len(matches))
 	for i, m := range matches {
 		// re.ReplaceAllString, not a literal splice: Go's regexp
@@ -146,6 +154,15 @@ func (e *Editor) SubstitutePreviewRanges() []offset.TextRange {
 }
 
 func (e *Editor) substitutePreviewRangesLocked() []offset.TextRange {
+	// An in-progress :s///c / :%s///c confirm flow takes priority: it's
+	// the only thing worth highlighting while it's active, and Editor's
+	// own Mode has already returned to Normal by the time it starts (see
+	// SubstituteConfirmState's doc comment), so checking Mode first would
+	// miss it entirely.
+	if e.cursor.SubstituteConfirm.Active {
+		m := e.substituteConfirmMatches[e.substituteConfirmIndex]
+		return []offset.TextRange{{Start: m.Start, Length: m.End - m.Start}}
+	}
 	if e.cursor.Mode != types.ModeCommand {
 		return nil
 	}
@@ -189,4 +206,118 @@ func (e *Editor) applySubstituteEditsLocked(edits []substituteEdit) {
 		}
 	}
 	e.finishBufferMutationLocked(e.cursor.ByteOffset)
+}
+
+// --- :s///c / :%s///c confirm flow (T30) ---
+//
+// Not a real Mode (same reasoning as HoverState/RegisterOverview on
+// Cursor): Editor's own Mode is back to Normal by the time this starts —
+// executeCommandLocked sets it right after the switch statement that
+// calls executeSubstituteLocked, so by the time a frontend's next
+// keystroke arrives, handleNormalModeKey (not handleCommandModeKey) is
+// what's live, and it intercepts y/n/a/q/l directly before keyengine ever
+// sees them (see dispatch.go) — necessary since "y" is also a real
+// Normal-mode verb (yank) that would otherwise resolve through the normal
+// grammar instead of answering the prompt. The actual match list/regexp/
+// replacement-template bookkeeping lives as unexported Editor fields
+// (substituteConfirm*, see editor.go's struct), mirroring
+// pendingReplace/pendingFindChar's own split between "what frontends need
+// to show" (Cursor.SubstituteConfirm) and "what Editor needs to resolve
+// the next keystroke."
+
+// startSubstituteConfirmLocked begins a confirm session over matches
+// (already found by executeSubstituteLocked), jumping the cursor to the
+// first candidate and showing its prompt. Caller must already hold e.mu.
+func (e *Editor) startSubstituteConfirmLocked(matches []substituteMatchLoc, re *regexp.Regexp, replacement string) {
+	e.substituteConfirmMatches = matches
+	e.substituteConfirmIndex = 0
+	e.substituteConfirmRe = re
+	e.substituteConfirmReplacement = replacement
+	e.cursor.SubstituteConfirm.Active = true
+	e.moveCursorToLocked(matches[0].Start, piecetable.Edit{})
+	e.updateSubstituteConfirmPromptLocked()
+}
+
+// handleSubstituteConfirmKeyLocked answers one keystroke of an active
+// confirm session — real vim's own y/n/a/q/l (plus <Esc> as a synonym for
+// q): y replaces the current candidate and moves on; n skips it; a
+// replaces it and every remaining candidate without asking again; l
+// replaces this one and ends the session (vim's "last"); q/<Esc> ends the
+// session untouched from here on. Anything else is ignored outright,
+// matching real vim's own prompt (it doesn't fall through to Normal-mode
+// grammar or beep-and-crash, it just keeps waiting for a valid answer).
+// Caller must already hold e.mu.
+func (e *Editor) handleSubstituteConfirmKeyLocked(key string) {
+	switch key {
+	case "y":
+		e.applySubstituteConfirmCurrentLocked()
+		e.advanceSubstituteConfirmLocked()
+	case "n":
+		e.advanceSubstituteConfirmLocked()
+	case "a":
+		for e.cursor.SubstituteConfirm.Active {
+			e.applySubstituteConfirmCurrentLocked()
+			e.advanceSubstituteConfirmLocked()
+		}
+	case "l":
+		e.applySubstituteConfirmCurrentLocked()
+		e.endSubstituteConfirmLocked()
+	case "q", "<Esc>":
+		e.endSubstituteConfirmLocked()
+	}
+}
+
+// applySubstituteConfirmCurrentLocked applies the confirm session's
+// current candidate as one real edit — the same substituteEdit/
+// applySubstituteEditsLocked shape every other substitute apply uses, so
+// it produces its own undo step just like the non-confirm path's N
+// separate steps already do. Every *remaining* candidate's offsets are
+// then shifted by this edit's length delta, since the whole match list
+// was located against the pre-edit text and a replacement of a different
+// length would otherwise misalign them. Caller must already hold e.mu.
+func (e *Editor) applySubstituteConfirmCurrentLocked() {
+	m := e.substituteConfirmMatches[e.substituteConfirmIndex]
+	newText := e.substituteConfirmRe.ReplaceAllString(m.Text, e.substituteConfirmReplacement)
+	e.applySubstituteEditsLocked([]substituteEdit{{Start: m.Start, End: m.End, NewText: newText}})
+
+	delta := len(newText) - (m.End - m.Start)
+	for i := e.substituteConfirmIndex + 1; i < len(e.substituteConfirmMatches); i++ {
+		e.substituteConfirmMatches[i].Start += delta
+		e.substituteConfirmMatches[i].End += delta
+	}
+}
+
+// advanceSubstituteConfirmLocked moves to the next candidate (jumping the
+// cursor there and refreshing the prompt), or ends the session once none
+// remain. Caller must already hold e.mu.
+func (e *Editor) advanceSubstituteConfirmLocked() {
+	e.substituteConfirmIndex++
+	if e.substituteConfirmIndex >= len(e.substituteConfirmMatches) {
+		e.endSubstituteConfirmLocked()
+		return
+	}
+	e.moveCursorToLocked(e.substituteConfirmMatches[e.substituteConfirmIndex].Start, piecetable.Edit{})
+	e.updateSubstituteConfirmPromptLocked()
+}
+
+// endSubstituteConfirmLocked tears down the session's state, whether it
+// finished naturally (every candidate answered) or was cut short (q/
+// <Esc>/l). Caller must already hold e.mu.
+func (e *Editor) endSubstituteConfirmLocked() {
+	e.cursor.SubstituteConfirm = SubstituteConfirmState{}
+	e.substituteConfirmMatches = nil
+	e.substituteConfirmIndex = 0
+	e.substituteConfirmRe = nil
+	e.substituteConfirmReplacement = ""
+	e.notifyChange(piecetable.Edit{})
+}
+
+// updateSubstituteConfirmPromptLocked recomputes the display-ready prompt
+// text for the current candidate — shown in both frontends' status bars
+// (see Cursor.SubstituteConfirm's doc comment). Caller must already hold
+// e.mu.
+func (e *Editor) updateSubstituteConfirmPromptLocked() {
+	m := e.substituteConfirmMatches[e.substituteConfirmIndex]
+	newText := e.substituteConfirmRe.ReplaceAllString(m.Text, e.substituteConfirmReplacement)
+	e.cursor.SubstituteConfirm.Prompt = fmt.Sprintf("replace with %q (y/n/a/q/l)?", newText)
 }

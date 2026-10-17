@@ -362,9 +362,17 @@ func Boot(ed *editor.Editor) error {
 			flex.ResizeItem(registerView, 0, 0)
 		}
 
-		if cursor.Mode == types.ModeCommand {
+		switch {
+		case cursor.SubstituteConfirm.Active:
+			// Takes priority over the normal status line the same way
+			// Command mode's own buffer display does — Editor's Mode is
+			// already back to Normal while this is active (see
+			// substitute.go's confirm-flow section), so this can't just
+			// be another case alongside ModeCommand below.
+			statusBar.SetText(fmt.Sprintf(" [#e0af68]%s[white]", cursor.SubstituteConfirm.Prompt))
+		case cursor.Mode == types.ModeCommand:
 			statusBar.SetText(fmt.Sprintf(" [#7aa2f7]:%s[white]", cursor.CommandBuffer))
-		} else {
+		default:
 			// Update bottom status bar with color-coded modes
 			var modeStr string
 			switch cursor.Mode {

@@ -102,6 +102,18 @@ func (e *Editor) handleNormalModeKey(key string) bool {
 		return true
 	}
 
+	// An in-progress :s///c / :%s///c confirm flow (T30) takes over
+	// y/n/a/q/l directly, intercepted here before keyengine ever sees the
+	// key — "y" is also a real Normal-mode verb (yank) that would
+	// otherwise resolve through the normal grammar instead of answering
+	// the prompt. See substitute.go's confirm-flow section.
+	if e.cursor.SubstituteConfirm.Active {
+		e.mu.Lock()
+		e.handleSubstituteConfirmKeyLocked(key)
+		e.mu.Unlock()
+		return true
+	}
+
 	// "r" (Replace) needs the *next* raw keystroke as its argument rather
 	// than being looked up in the verb/modifier/noun tables — the same
 	// bounded, one-keystroke literal-capture primitive Insert/Command mode

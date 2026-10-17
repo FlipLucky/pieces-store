@@ -2,6 +2,7 @@ package editor
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -59,6 +60,18 @@ type Editor struct {
 	// on the type.
 	lspService  lspservice.Service
 	diagnostics []viewmanager.DiagnosticSpan
+	// substituteConfirm* back an in-progress :s///c / :%s///c confirm
+	// flow (T30, internal/editor/substitute.go) — the match list (already
+	// offset-adjusted as earlier candidates are answered), which one is
+	// current, the compiled pattern, and the replacement template. Kept
+	// off Cursor itself (which only gets SubstituteConfirm's Active/Prompt
+	// display fields) since a *regexp.Regexp and a mutable match slice
+	// aren't render-facing state, the same split pendingReplace/
+	// pendingFindChar already use.
+	substituteConfirmMatches     []substituteMatchLoc
+	substituteConfirmIndex       int
+	substituteConfirmRe          *regexp.Regexp
+	substituteConfirmReplacement string
 }
 
 // ChangeEvent describes one change to the editor's state, delivered on

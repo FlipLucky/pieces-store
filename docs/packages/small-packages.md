@@ -80,10 +80,15 @@ complete `pattern/replacement/` before highlighting anything (`:s/hel`
 showed nothing), when real nvim narrows the highlight live as the pattern
 itself is typed, before any closing delimiter exists — fixed the same day
 it was caught via real use. See [Front ends](frontends.md) for how each
-frontend renders the resulting highlight. The `c` (confirm) flag — real
-per-match y/n/a/q/l interactivity — is queued next (`ATOMIC_TASKS.md`'s
-T30, bumped ahead of the UX-polish queue per the user's own workflow), not
-done yet.
+frontend renders the resulting highlight. The `c` (confirm) flag —
+real per-match y/n/a/q/l interactivity — shipped the same day
+(`ATOMIC_TASKS.md`'s T30): `SubstitutePreviewRanges` itself now also
+serves the confirm flow's "highlight the current candidate" need (it
+checks a new `Cursor.SubstituteConfirmState` first), so no second
+highlight mechanism was needed. The interactive `y`/`n`/`a`/`q`/`l`
+interception lives in `internal/editor/dispatch.go`'s
+`handleNormalModeKey`, ahead of keyengine's own grammar — necessary since
+`y` is also a real Normal-mode yank verb.
 
 ## Depends on
 

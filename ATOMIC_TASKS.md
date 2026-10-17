@@ -472,33 +472,50 @@ import — c is already a habit; %s feels incomplete without it").
       current-line/`%` scope, silent on invalid/incomplete input) and at
       the rendering level (`tui-base`'s `styledLineText` tests cover
       highlight-over-plain-text and highlight-over-keyword-color). (M, 🤖)
-- [ ] **T30 — The `c` (confirm) flag.** Walks each match one at a time,
-      asking y/n/a/q/l before deciding — real per-match interactivity, not
-      just a highlight. Reuses T29's `findSubstituteMatchesLocked`/
-      highlight-rendering machinery for "where's the current candidate"
-      rather than a new scan. New pieces: a confirm-prompt state on
-      `Cursor` (same shape as `HoverState`/`RegisterOverview` — not a real
-      `Mode`); a new top-of-`HandleKey` interception for `y`/`n`/`a`/`q`/`l`
-      while it's active, ahead of Normal-mode dispatch (needed since `y`
-      is also a real Normal-mode verb — same precedence shape Insert/
-      Command mode's own literal-capture branches already use); a small
-      status-bar prompt in both frontends; and a running offset-delta as
-      edits land one at a time, since later matches were located against
-      the pre-edit text and need shifting once an earlier one's replacement
-      changes length. All familiar shapes, not a new rendering
-      architecture — closer to the T22-T25 register/named-register batch
-      than to T29's own highlighting work. (M, 🧠 — real interaction
-      design: where the prompt itself shows in each frontend is worth
-      scoping deliberately, not defaulted)
+- [x] **T30 — The `c` (confirm) flag.** Done 2026-10-17. Walks each match
+      one at a time, asking y/n/a/q/l before deciding. Reuses T29's
+      `findSubstituteMatchesLocked` for the match list and
+      `SubstitutePreviewRanges` itself for highlighting — that function now
+      checks `Cursor.SubstituteConfirm.Active` first and returns just the
+      current candidate's range, so **zero frontend rendering changes**
+      were needed for the highlight (both frontends already called
+      `SubstitutePreviewRanges` every render). New `SubstituteConfirmState
+      {Active, Prompt}` on `Cursor` (same shape as `HoverState`/
+      `RegisterOverview` — not a real `Mode`); the actual match list/
+      regexp/replacement-template bookkeeping lives as unexported `Editor`
+      fields (`substituteConfirm*`), mirroring `pendingReplace`/
+      `pendingFindChar`'s own split. A real, necessary subtlety caught
+      before writing any code (not after): `executeCommandLocked` resets
+      `Mode` to Normal *after* the command-dispatch switch returns, so by
+      the time `executeSubstituteLocked` starts a confirm session,
+      `Editor.Mode` is about to be Normal again — meaning
+      `handleNormalModeKey`, not `handleCommandModeKey`, is what's live for
+      the next keystroke, which is exactly where the new
+      `y`/`n`/`a`/`q`/`l` interception needed to go (ahead of `pendingReplace`,
+      mirroring its own precedent) — confirmed by reading the actual
+      control flow, not assumed. "a" (replace this and all remaining) is a
+      tight loop reusing the same single-match apply+advance the "y" case
+      uses; "l" applies one and ends; `q`/`<Esc>` end untouched; anything
+      else is ignored outright, matching real vim's own prompt behavior.
+      Each applied match shifts every *remaining* match's offsets by the
+      real length delta, since the whole list was located against the
+      pre-edit text. Verified end-to-end through `ExecuteCommand`/
+      `HandleKey`, not just unit-level resolver tests — see
+      `internal/editor/substitute_test.go`'s `TestSubstituteConfirm*`
+      (14 cases), including a dedicated regression guard
+      (`TestSubstituteConfirmYIsInterceptedNotYanked`) proving `y` is
+      answered as "yes, replace," never falls through to the real
+      Normal-mode yank verb it would otherwise collide with. Both tagged
+      `gui-local`/`tui-local` builds verified clean.
 
 ## 7. UX polish pass — "works" vs. "feels nice" (2026-10-17)
 
 Prompted directly by the user's own lived experience hitting the gap
 ("i need to check the bottom bar for my mode, which felt odd") plus two
-more small-change/big-UX-result asks in the same message. Sequenced by the
-user as cursor shape → command completion → line numbers
-("sequence is good") — T30 above now runs ahead of T27/T28 per the user's
-own reprioritization.
+more small-change/big-UX-result asks in the same message. Final confirmed
+sequence (2026-10-17, after T30 was bumped ahead and T31 was added): T26
+(done) → T30 (section 6, above) → **T28 → T27 → T31** (this section, in
+this order).
 
 - [x] **T26 — Mode-based cursor shape in `tui-base`.** Done 2026-10-17.
       `gui-base` already drew a block (Normal/Visual/Command) vs. pipe
@@ -528,15 +545,6 @@ own reprioritization.
       `Boot`-level concern, not a `styledLineText` one. Verified:
       `go build`/`vet`/`gofmt`/`test ./...` clean, plus both tagged
       `gui-local`/`tui-local` builds. (M, 🤖)
-- [ ] **T27 — Command-name autocomplete in Command mode.** `:Lsp<Tab>` →
-      cycles `LspInstall`/`LspUninstall`/`LspStatus`/etc., the same way
-      `:e`/`:w` already autocomplete paths. Reuses the existing
-      `CompletionState`/popup UI mechanism end to end (both frontends
-      already render it) — the new part is a static command-name
-      candidate source, triggered from `completionCandidates` when its
-      current `idx := strings.LastIndexByte(buffer, ' '); if idx < 0`
-      guard would otherwise come back empty (i.e. the user is still
-      typing the command name itself, before any argument). (M, ❓)
 - [ ] **T28 — Line numbers, with a relative/absolute toggle.** New gutter-
       rendering logic in both `gui-base` and `tui-base` independently (no
       shared rendering code between the two frontends today, so this is
@@ -547,6 +555,168 @@ own reprioritization.
       lives (a new `Editor`/`Cursor` field most likely, since both
       frontends need to read it every render). (L, 🧠 — real design
       surface, a good one to scope together rather than hand off whole)
+- [ ] **T27 — Command-name autocomplete in Command mode.** `:Lsp<Tab>` →
+      cycles `LspInstall`/`LspUninstall`/`LspStatus`/etc., the same way
+      `:e`/`:w` already autocomplete paths. Reuses the existing
+      `CompletionState`/popup UI mechanism end to end (both frontends
+      already render it) — the new part is a static command-name
+      candidate source, triggered from `completionCandidates` when its
+      current `idx := strings.LastIndexByte(buffer, ' '); if idx < 0`
+      guard would otherwise come back empty (i.e. the user is still
+      typing the command name itself, before any argument). Widened
+      2026-10-17: also wire arrow-up/down and `<C-p>`/`<C-n>` to browse
+      *command history* while in Command mode with an empty/unmodified
+      buffer (real vim's own `:`-history recall) — **but there's no
+      command-history mechanism anywhere in this codebase today**
+      (confirmed via grep, not assumed), so that half is split out into
+      **T32** below and deferred rather than silently expanding this
+      task's scope. (M, ❓)
+- [ ] **T31 — `/pattern<CR>` search, with `<C-n>`/`<C-p>` to cycle
+      matches.** The missing half of "find and replace" — only replace
+      exists today. The live-highlight mechanism from T29
+      (`SubstitutePreviewContains`/`SubstitutePreviewRangesForRange` +
+      each frontend's highlight rendering) already works and is confirmed
+      good by real use ("tested it, works great!") — reuse it directly for
+      search-match highlighting rather than building a second highlight
+      path. Real differences from `:s///`'s scan, though, not a copy-
+      paste: search scope is the *whole buffer* (not current-line-by-
+      default like substitute), matches wrap around from the cursor
+      position, and there's no replacement/edit at all — just navigation.
+      Needs: a new `/`-prefixed entry point (the `/` key in Normal mode,
+      parsed similarly to `:` but not through `exmode` — a search pattern
+      isn't a command), a `Cursor`-level search state (pattern + the
+      current match index, so `<C-n>`/`<C-p>` know what they're cycling)
+      that `Enter` commits into, and cursor-jump-to-match on confirm/cycle.
+      Deliberately scoped per the user's own explicit instruction to reuse
+      `<C-n>`/`<C-p>` for next/prev match — the same two keys already mean
+      "cycle" everywhere else in this codebase (path completion, LSP
+      completion) — rather than real vim's own dedicated `n`/`N`, keeping
+      one consistent "these two keys cycle whatever's active" convention
+      instead of adding a second one. (M, ❓)
+
+## 7b. Deferred sub-feature
+
+- [ ] **T32 — Command-mode history.** A real command-history store (most
+      recently executed `:`/`/` commands, newest-accessible-first) —
+      doesn't exist anywhere in this codebase yet (confirmed via grep).
+      Split out from T27 rather than silently folded in, since T27's own
+      scope (command-*name* completion) is unrelated to recalling past
+      full commands. Needed by T27's arrow-up/down/`<C-p>`/`<C-n>`
+      history-browsing half, and plausibly reusable by T31's `/` search
+      too (real vim shares one history ring per prompt type — `:` and `/`
+      each get their own). Where it lives is an open design question: most
+      likely a bounded ring on `Editor` (mirroring `Table.History`'s own
+      "no cap yet, revisit if it matters" precedent from
+      `BACKLOG.md`), populated on every real `ExecuteCommand`/confirmed
+      search. (M, ❓)
+
+## 8. Bulk Normal-mode keybinding wins (audit 2026-10-17)
+
+The user's own framing: "look up all nvim keybindings in normal mode, and
+see how much can already be built... if we can make a bulk of all the
+keybindings that can be implemented with reusing what we already have, we
+make a major UX improvement, without adding anything 'new'." A dedicated
+fork audit re-verified `VIM_ACTION_CHECKLIST.md`'s claims against the real
+current `keyengine`/`interpreter`/`offset`/`executor` code (the checklist
+itself turned out badly stale — `y`/`p`/`P`, named registers, short-delete,
+`x`, counted operators all show as unchecked there despite being done) and
+sorted every remaining candidate into: already done (stale checkbox only),
+trivial reuse, small-new-primitive, or genuinely-excluded (Visual mode,
+macros, marks, undo tree, dot-repeat, viewport-relative motions, and
+anything depending on T31's search existing first — these stay tracked in
+`VIM_ACTION_CHECKLIST.md` itself, not duplicated here). Queued (exact
+ordering against T27/T28/T30/T31/T32 above deliberately left open — "decide
+order later"), grouped by shape rather than as one giant task or 20 tiny
+ones:
+
+- [ ] **T33 — Bare line-position & motion-variant keys: `0` `$` `^` `t` `T`
+      `W` `B` `E`.** All table-entry-level: `0`/`$` export already-written-
+      but-unexported `lineStart`/`lineEnd` (`internal/offset/motions.go`)
+      as new noun identities; `^` composes `lineStart` + `FindOffset` with
+      a `Not(IsWhitespace)` predicate (already exported) clamped to
+      `lineEnd`; `t`/`T` are `f`/`F`'s existing `MotionFindCharForward`/
+      `Backward` shape with a one-step-back adjustment; `W`/`B`/`E` are
+      `MotionWordForward`/`Backward`/`End` with `IsWordChar` swapped for
+      `Not(IsWhitespace)` — near-1:1 parametrization of functions that
+      already exist, 3 keybindings almost free. (L — many small pieces
+      bundled, 🔧 mechanical/solo-good)
+- [ ] **T34 — Edit-operator variants: `X` `a` `s` `S` `Y` `D` `C` `I`
+      `A`.** All Verb/EnterInsert composition, no new `ActionKind`: `X` =
+      `resolveMotionRange`'s existing backward-landing branch + a direct
+      entry; `a` = Move(CharForward) + EnterInsert; `s`/`S` = `cl`/`cc`
+      exactly (Change already composes Delete+EnterInsert); `Y` = `yy`
+      (real vim/nvim default, not `y$`); `D`/`C` reuse T33's `$`
+      noun identity once it lands; `I`/`A` reuse T33's `^`/`$` + EnterInsert
+      once those land (real dependency — sequence T33 before this). (L,
+      🔧 mechanical/solo-good)
+- [ ] **T35 — Case-toggle & line-join primitives: `~` `gu` `gU` `g~` `J`
+      `gJ`.** `~` = read-rune (`GetRuneAt` already exists) + Delete(1) +
+      Insert(toggled) + Move, all existing `ActionKind`s. `gu`/`gU`/`g~`
+      generalize `~` over `resolveRange`'s already-generic range
+      resolution (build once, reuse for all three case directions). `J`/
+      `gJ` need one genuinely new `offset` function (join point + smart-
+      whitespace replacement text) but reuse existing Delete+Insert to
+      apply it — same shape as every other primitive here, not a new
+      architectural concept. (M, 🔧/🧠 mixed — `~` is mechanical, the `g`-
+      prefixed range generalization is a real small design)
+- [ ] **T36 — Navigation primitives: `gg` `G` (bare) `{` `}` `;` `,`
+      `gi`.** `gg`/`G` reuse existing `PositionToByteOffset`/
+      `ByteOffsetToPosition` math but need special-casing in
+      `resolveMove`'s generic count-repeat loop (`{count}G` means "go to
+      line N," not "repeat N times" — same kind of exception
+      `resolveLineStep` already carves out for `j`/`k`). Bare `{`/`}`
+      reuse `RangeInnerParagraph`'s existing `prevLineSpan`/`nextLineSpan`/
+      `isBlankSpan` blank-detection directly, just as a Move instead of a
+      Range. `;`/`,` (repeat last `f`/`F`/`t`/`T`) need one new `Cursor`
+      field (last target rune + direction) — same shape as the existing
+      `pendingReplace`/`pendingFindChar` fields. `gi` (resume insert at
+      last exit position) needs one new `Cursor` field, trivial once
+      tracked. (M, ❓)
+- [ ] **T37 — Bracket/quote text objects: `i(`/`a(`, `i{`/`a{`, `i"`/`a"`
+      (+ their other bracket/quote equivalents).** Same resolver *shape*
+      as `RangeInnerWord`/`RangeAroundWord`, but each needs real bracket-
+      matching or quote-scanning logic (not just a predicate swap the way
+      `W`/`B`/`E` were) — a genuinely new primitive per text-object family,
+      though all the same small kind of thing `offset` already does. (M
+      per family — size the bracket family and the quote family
+      separately when picked up, don't treat as one task)
+- [ ] **T38 — Indent/dedent/reindent operators: `>` `<` `=`.** Reuses
+      `resolveRange` for the target range and `IndentStringAt` for `='s
+      depth, but needs a new multi-line batch-apply method — real
+      precedent already exists for this exact shape (`:Format`'s
+      `applyTextEditsLocked`, `:s///`'s `applySubstituteEditsLocked`), so
+      this is "write the third instance of an established pattern," not
+      a new one. (M, ❓)
+
+## 9. `:h`/`:help` + a scrollable keybinding overview (2026-10-17)
+
+Raised directly off the T33-T38 audit above — more keybindings landing in
+bulk makes "what's actually bound" worth surfacing *now*, not deferred,
+per the user's own framing ("better maintenance... should be added now,
+instead of in the future"). Scoped deliberately small for a first pass: a
+scrollable list, one line per keybinding, a ~5-word description each — no
+real help-topic prose yet (that's explicitly future work layered onto the
+same `:h` entry point later, e.g. `:h daw` for a full explanation).
+
+- [ ] **T39 — `:h`/`:help` command + scrollable keybinding-overview UI.**
+      The real design decision, worth getting right once rather than
+      iterating: **generate the overview from the `keyengine` tables
+      themselves** (adding a short `Description` field to each table
+      entry/`DirectAction`), not a hand-maintained parallel list — the
+      exact staleness failure this task's own audit just found in
+      `VIM_ACTION_CHECKLIST.md` is precisely what a second, separately-
+      maintained list would reproduce. New UI shape, not a reuse of
+      `RegisterOverview`'s mechanism: that one is "any key dismisses,"
+      but a scrollable list needs real scroll-key handling (`j`/`k`/
+      arrows/`<C-d>`/`<C-u>`) before an explicit close key (`q`/`<Esc>`) —
+      closer to a small, real mini-mode than a passive overlay. Likely a
+      full-viewport overlay in both frontends rather than a small docked
+      panel, since the list is long: `tui-base` can reuse `tview.Pages`
+      (already used for the hover popup) with a real scrollable
+      `tview.TextView`; `gui-base` can use Gio's `layout.List`, which
+      natively supports scrolling — built for exactly this, unlike
+      anything currently in `gui-base`'s own rendering. (M/L, 🧠 — real
+      interaction + data-source design, worth scoping deliberately)
 
 ## Longer horizon — browse, don't start yet
 
