@@ -40,10 +40,31 @@ unwanted pair on the apostrophe).
 ## internal/exmode
 
 Command-mode (`:...`) parsing, split out of `Editor`, mirroring how Normal
-mode already got [keyengine](keyengine.md). The planned future home for
-`:s///` parsing (see `ATOMIC_TASKS.md`'s T13-T15) — deliberately almost
-entirely out of scope for the Validator→Processor→Executor redesign, since
+mode already got [keyengine](keyengine.md). Deliberately almost entirely
+out of scope for the Validator→Processor→Executor redesign, since
 `:w`/`:q`/`:e` are genuine side effects, not Target+Action.
+
+`Command` gained two fields for `:s///` (T13-T15, 2026-10-17): `Raw` (the
+text after the command name, *not* whitespace-tokenized like `Args` —
+needed because a substitute's pattern/replacement may contain spaces) and
+`WholeBuffer` (true on a leading `%` prefix, e.g. `:%s///` — a
+deliberately minimal range system: just "current line" (the default,
+matching real vim) vs. "whole buffer," not arbitrary `N,M` ranges).
+`Parse`'s name-scanner now stops at the first non-letter/digit/`!`
+character, not just whitespace, so `:s/foo/bar/` parses `Name="s"` with no
+space needed before the delimiter, unlike every other command. A separate
+`ParseSubstitute(raw string) (SubstituteCommand, bool)` parses the
+delimited body itself — whichever character immediately follows `s` is
+the delimiter (matching real vim, not hardcoded to `/`), with `\<delim>`
+escaping a literal delimiter inside a segment. Execution
+(`executeSubstituteLocked`, `internal/editor/substitute.go`) uses Go's own
+`regexp` package (RE2 syntax) — a real, deliberate divergence from vim's
+own regex dialect (no backreferences/lookaround in patterns), documented
+rather than silently accepted; the `g` flag is supported, `c`/`i` and
+arbitrary ranges deliberately deferred, matching this task's own staged
+scope. One real capability that came along for free: Go's replacement
+string already supports `$1`/`$name` capture-group references (not vim's
+own `\1` syntax) since `regexp.ReplaceAllString` interprets them natively.
 
 ## Depends on
 

@@ -170,7 +170,18 @@ list, not a gap.
   (an operator acts on the current selection directly, no following noun
   needed), so this needs real design work, not just filling in the
   existing table shape, whenever Visual mode is actually in scope.
-- **Counted delete isn't implemented** — `executeDelete` (`internal/editor/dispatch.go`)
-  ignores `Count`, applying once regardless (e.g. `3diw` behaves like
-  `diw`). Not in the agreed 14-case list; `executeMove` already loops on
-  `Count` if a similar loop is wanted here later.
+- ~~**Counted delete isn't implemented**~~ **Done** — `3diw`/`2dd`/etc. all
+  work via `interpreter.resolveRange`'s count-chaining (`ATOMIC_TASKS.md`'s
+  T17); `3dw`-style bare-motion counting works via `resolveMotionRange`
+  (T22). This bullet referenced `executeDelete`, which no longer exists
+  post-pipeline-redesign — stale, left unnoticed until now.
+- **`:s///`'s regex dialect is Go's own `regexp` (RE2), not vim's** — no
+  backreferences or lookaround in patterns; the replacement uses Go's
+  `$1`/`$name` capture-group syntax, not vim's `\1`. A deliberate,
+  documented stdlib-only choice (`ATOMIC_TASKS.md`'s T13-T15), not an
+  oversight — revisit only if real vim-regex parity becomes a genuine
+  product need.
+- **`:s///` has no arbitrary `N,M` line-range support** — only "current
+  line" (the default) and `%` (whole buffer) exist; `c`/`i` flags are also
+  unimplemented. All deliberately deferred as the next incremental step on
+  this feature, not forgotten.

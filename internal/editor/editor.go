@@ -496,6 +496,8 @@ func (e *Editor) executeCommandLocked(rawCmd string) error {
 		err = e.startFormatLocked()
 	case "register", "registers":
 		e.openRegisterOverviewLocked()
+	case "s", "substitute":
+		err = e.executeSubstituteLocked(cmd)
 	default:
 		err = ErrUnknownCommand
 	}

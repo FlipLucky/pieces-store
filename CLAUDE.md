@@ -810,6 +810,37 @@ moves/extractions with no behavior change — every pre-existing test passes
 unchanged, confirmed via `go build`/`vet`/`gofmt`/`test` after each item,
 plus both tagged `gui-local`/`tui-local` builds clean at the end.
 
+**Find/replace (`:s///` + `:%s///`) shipped, 2026-10-17** (`ATOMIC_TASKS.md`'s
+T13–T15), chained in right after the structural refactor above per the
+user's own request, and widened on their explicit instruction to include
+`%s` (whole-buffer scope) from the start rather than deferring every range
+as originally planned — the rest of the staging (`g` flag first, `c`/`i`
+and arbitrary `N,M` ranges deferred) held as planned. `exmode.Command`
+gained `Raw` (the untokenized remainder after the command name — a
+substitute's pattern/replacement may contain spaces) and `WholeBuffer`
+(true on a leading `%`); `Parse`'s name-scanner now stops at the first
+non-letter/digit/`!` character, not just whitespace, so `:s/foo/bar/`
+parses with no space needed before the delimiter. A real, deliberate
+divergence from vim's own regex dialect: patterns/replacements use Go's
+own `regexp` package (RE2 — no backreferences/lookaround), a stdlib-only
+choice consistent with this codebase's existing "no new third-party
+dependency when the standard library already covers it" pattern (see
+`lspmanager`'s own precedent) — documented rather than silently accepted.
+One real capability that came along free: Go's `ReplaceAllString` already
+interprets `$1`/`$name` capture-group references in the replacement (not
+vim's own `\1` syntax). Execution
+(`internal/editor/substitute.go`'s `executeSubstituteLocked`) reduces to
+the same action+offset shape as everything else here: each match becomes
+a byte-offset edit, applied end-to-start by a new `applySubstituteEditsLocked`
+— the same reasoning `:Format`'s `applyTextEditsLocked` already
+established, kept as its own method since the edit shapes genuinely differ
+(byte offsets here, LSP `Position`s there). `ErrPatternNotFound` (real
+vim's own E486) and `ErrInvalidSubstitute` surface the same way `:q`'s
+refusal already does. Verified end-to-end through `ExecuteCommand`, not
+just unit-level parser tests — see
+`internal/editor/substitute_test.go`'s full matrix. Both tagged
+`gui-local`/`tui-local` builds verified clean.
+
 ## Module & toolchain
 
 - Module: `github.com/fliplucky/pieces-store`

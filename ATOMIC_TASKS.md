@@ -216,19 +216,57 @@ real `HandleKey` sequences.
   [Validator → Processor → Executor](docs/concepts/validator-processor-executor.md)
   entry already described as intended, not yet exercised.
 
-## 4. Find/replace (`:s///`) — the next roadmap item per `CLAUDE.md`
+## 4. Find/replace (`:s///`) — done ✅
 
-Deliberately out of scope for the pipeline redesign above — `:s///` is the
-one Command-mode feature that will eventually fit Target+Action, but
-nothing here needs the redesign to land first.
+Done 2026-10-17, chained in directly after the structural refactor
+(Section 2) per the user's own instruction, and widened on their request
+to include `%s` (whole-buffer scope) from the start rather than deferring
+all ranges as originally planned — the rest of the original staging
+(`g` flag first, `c`/`i`/arbitrary `N,M` ranges deferred) held.
 
-- [ ] **T13** — Design `:s/pattern/replacement/flags` parsing as a new
-      `exmode` command shape. (M, ❓ — approachable either way; regex edge
-      cases are a reasonable delegate candidate if time's short)
-- [ ] **T14** — Wire execution into `executeCommandLocked`. (M, 🤖)
-- [ ] **T15** — Support the `g` flag first; defer `c`/`i`/ranges — matches
-      the staged approach `CLAUDE.md` already describes for this feature.
-      (S, 🤖, depends on T13/T14)
+- [x] **T13** — `exmode.Command` gained `Raw` (the untokenized remainder
+      after the command name — a substitute's pattern/replacement may
+      contain spaces, so `Args`'s whitespace-split shape doesn't fit) and
+      `WholeBuffer` (true on a leading `%`). `Parse`'s name-scanner now
+      stops at the first non-letter/digit/`!` character, not just
+      whitespace, so `:s/foo/bar/` parses `Name="s"` with no space needed
+      — every other command always has one. New
+      `ParseSubstitute(raw) (SubstituteCommand, bool)` parses the
+      delimited body: whichever character immediately follows `s` is the
+      delimiter (matching real vim, not hardcoded to `/`), `\<delim>`
+      escapes a literal delimiter inside a segment.
+- [x] **T14** — `executeCommandLocked`'s `"s", "substitute"` case calls
+      new `executeSubstituteLocked` (`internal/editor/substitute.go`).
+      Scope (current line vs. every line, from `WholeBuffer`) is resolved
+      by splitting the buffer into lines and computing each line's
+      absolute byte offset once; matches become `substituteEdit{Start,
+      End, NewText}` entries applied end-to-start via
+      `applySubstituteEditsLocked` — the same "sort/apply backward so an
+      earlier edit's offset survives" shape `applyTextEditsLocked`
+      (`:Format`) already established, kept as a separate method since
+      the edit shapes genuinely differ (byte offsets here vs. LSP
+      `Position`s there, which would need a pointless round-trip
+      conversion to reuse the existing one). Like `:Format`'s multi-edit
+      apply, N matches is N separate undo steps, not one — an existing,
+      already-accepted tradeoff in this codebase, not a new one.
+- [x] **T15** — `g` flag supported (`strings.Contains(flags, "g")`);
+      without it, only the first match per in-scope line is replaced,
+      matching real vim's own default. **A real, deliberate divergence
+      from vim's own regex dialect**: patterns/replacements use Go's
+      `regexp` package (RE2 syntax) — no backreferences or lookaround —
+      documented in `substitute.go`'s package doc comment and
+      `docs/packages/small-packages.md` rather than silently accepted (no
+      new third-party dependency, consistent with this codebase's existing
+      stdlib-first pattern — see `lspmanager`'s own "zero new third-party
+      dependencies" precedent). One real capability that came along free:
+      Go's `ReplaceAllString` already interprets `$1`/`$name` capture-group
+      references in the replacement (not vim's own `\1` syntax) — see
+      `TestSubstituteSupportsCaptureGroups`. `ErrPatternNotFound` (real
+      vim's own E486) and `ErrInvalidSubstitute` (malformed command shape)
+      are distinct, surfaced the same way `:q`'s refusal already is. See
+      `internal/editor/substitute_test.go` for the full matrix (current-
+      line/whole-buffer × with/without `g`, pattern-not-found, malformed
+      command, invalid regex, capture groups, a custom delimiter).
 
 ## 5. Small, self-contained bug fixes (good solo confidence-builders)
 
