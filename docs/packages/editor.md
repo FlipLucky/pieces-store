@@ -94,6 +94,16 @@ logic out of `Editor` into the type that should own it, per
   of yank/delete/visual, then named registers alphabetically) and
   centralizes line formatting here rather than duplicating it per
   frontend — see [clipboard-register](clipboard-register.md).
+- `settings.go` (T28, 2026-10-17) — `:set`, a small starter subset today
+  (`number`/`nu`, `nonumber`/`nonu`, `relativenumber`/`rnu`,
+  `norelativenumber`/`nornu` — the line-number gutter's own toggle, real
+  vim's two independent options not a three-way enum). Each option is its
+  own pair of unexported `Editor` fields rather than a generic string-keyed
+  map, matching this codebase's "add a table entry/case, not a new
+  mechanism" extension style; a future option is another `case` here.
+  `LineNumberSettings()` exposes the on/off state read-only — `Editor`
+  itself does no gutter-rendering math, that lives in
+  [viewmanager](viewmanager.md)'s `GutterWidth`/`GutterText`.
 - `async.go` — the answer to async orchestration: an `asyncResults`
   channel drained by one dedicated goroutine that takes `e.mu.Lock()`
   around each queued closure. Every async producer (LSP install,

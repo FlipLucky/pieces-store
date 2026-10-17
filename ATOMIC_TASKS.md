@@ -514,8 +514,8 @@ Prompted directly by the user's own lived experience hitting the gap
 ("i need to check the bottom bar for my mode, which felt odd") plus two
 more small-change/big-UX-result asks in the same message. Final confirmed
 sequence (2026-10-17, after T30 was bumped ahead and T31 was added): T26
-(done) → T30 (section 6, above) → **T28 → T27 → T31** (this section, in
-this order).
+(done) → T30 (section 6, above) → T28 (done, below) → **T27 → T31** (this
+section, in this order).
 
 - [x] **T26 — Mode-based cursor shape in `tui-base`.** Done 2026-10-17.
       `gui-base` already drew a block (Normal/Visual/Command) vs. pipe
@@ -545,16 +545,58 @@ this order).
       `Boot`-level concern, not a `styledLineText` one. Verified:
       `go build`/`vet`/`gofmt`/`test ./...` clean, plus both tagged
       `gui-local`/`tui-local` builds. (M, 🤖)
-- [ ] **T28 — Line numbers, with a relative/absolute toggle.** New gutter-
-      rendering logic in both `gui-base` and `tui-base` independently (no
-      shared rendering code between the two frontends today, so this is
-      real duplicated work, not a one-package change) plus a toggle
-      mechanism — likely a `:set relativenumber`/`:set number`-style
-      command through the existing `exmode`/`executeCommandLocked` path.
-      Open design question not yet resolved: where the toggle's own state
-      lives (a new `Editor`/`Cursor` field most likely, since both
-      frontends need to read it every render). (L, 🧠 — real design
-      surface, a good one to scope together rather than hand off whole)
+- [x] **T28 — Line numbers, with a relative/absolute toggle.** Done
+      2026-10-17. Modeled on real vim's own two *independent* options,
+      `number`/`relativenumber` — not a single three-way toggle — a design
+      choice backed by a real signal, not just vim-parity-for-its-own-sake:
+      a background audit of the user's own nvim dotfiles found both set
+      together, confirming the "hybrid" gutter (current line shows its
+      absolute number, every other line shows relative distance) is a
+      genuine daily habit, not a hypothetical. New `internal/viewmanager/
+      gutter.go` holds the pure, dependency-free rendering math:
+      `GutterWidth(highestVisibleRow)` sizes the column off the *currently
+      visible* highest row (not a full-document line-count scan), matching
+      this codebase's existing viewport-bounded-cost principle
+      (`ViewportSlice`/`FindPieceAt`'s own deferred-scan precedent) — the
+      tradeoff is the gutter can grow a digit as a user scrolls deep into a
+      huge file, accepted deliberately rather than paying for an upfront
+      full scan. `GutterText(row, cursorRow, showNumber, relative, width)`
+      returns one row's padded cell, empty when both options are off so a
+      caller skips the column entirely. One real bug caught by its own test
+      before shipping (not by the user): the current-line left-aligned
+      special case fired whenever `row == cursorRow` regardless of
+      `relative`, so plain `:set number` (no relativenumber) incorrectly
+      left-aligned just the current line instead of right-aligning every
+      row uniformly — fixed by gating that branch on `relative &&
+      row == cursorRow`. Toggle state lives as two unexported `Editor`
+      fields (`showLineNumbers`/`relativeLineNumbers`, see `editor.go`) set
+      via a new minimal `:set` command (`internal/editor/settings.go`'s
+      `executeSetLocked` — `number`/`nu`, `nonumber`/`nonu`,
+      `relativenumber`/`rnu`, `norelativenumber`/`nornu`) reusing
+      `exmode.Parse`'s existing `Args` tokenization with zero `exmode`
+      changes needed; `Editor.LineNumberSettings()` exposes the on/off
+      state read-only. Wired into both frontends independently (no shared
+      rendering code between them, confirmed real duplicated work, not a
+      one-package change): `tui-base` prepends each line's gutter text as a
+      muted-color tag inside `renderContent`'s per-line loop; `gui-base`
+      prepends a gutter `material.Label` via a new Horizontal
+      `layout.Flex` wrapper in `renderLine` (falling back to the old
+      single-widget fast path when the gutter and diagnostic virtual-text
+      are both absent, so a plain line pays no new Flex overhead). Critical
+      follow-on fix in both frontends, caught by tracing the column math
+      rather than discovered live: the gutter shifts where column 0 of the
+      cursor's own text actually starts on screen, so `tui-base`'s
+      `cursorScreenCol` (feeding T26's native-cursor positioning) and both
+      frontends' hover/completion-popup `x` calculation
+      (`renderHoverPopup`) each gained `+ gutterWidth` (character-count in
+      `tui-base`, `gutterWidth * charWidth` pixels in `gui-base`) — without
+      this, turning line numbers on would have silently misplaced the
+      terminal cursor and the LSP popup out from under the real text.
+      Verified via `internal/viewmanager/gutter_test.go` (5 cases) and
+      `internal/editor/settings_test.go` (6 cases covering toggle-on/off,
+      the independent-combination "hybrid" case, and unknown-option/no-
+      argument errors); `go build`/`vet`/`gofmt`/`test ./...` all clean,
+      plus both tagged `gui-local`/`tui-local` builds. (L, 🧠)
 - [ ] **T27 — Command-name autocomplete in Command mode.** `:Lsp<Tab>` →
       cycles `LspInstall`/`LspUninstall`/`LspStatus`/etc., the same way
       `:e`/`:w` already autocomplete paths. Reuses the existing

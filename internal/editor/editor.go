@@ -72,6 +72,13 @@ type Editor struct {
 	substituteConfirmIndex       int
 	substituteConfirmRe          *regexp.Regexp
 	substituteConfirmReplacement string
+	// showLineNumbers/relativeLineNumbers back the ":set number"/
+	// ":set relativenumber" gutter toggle (T28, settings.go) — real vim's
+	// own two independent options, not a single three-way enum (a real
+	// nvim config audit confirmed combining them, the "hybrid" gutter, is
+	// an actual user habit, not a hypothetical).
+	showLineNumbers     bool
+	relativeLineNumbers bool
 }
 
 // ChangeEvent describes one change to the editor's state, delivered on
@@ -511,6 +518,8 @@ func (e *Editor) executeCommandLocked(rawCmd string) error {
 		e.openRegisterOverviewLocked()
 	case "s", "substitute":
 		err = e.executeSubstituteLocked(cmd)
+	case "set":
+		err = e.executeSetLocked(cmd.Args)
 	default:
 		err = ErrUnknownCommand
 	}

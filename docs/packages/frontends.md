@@ -27,6 +27,21 @@ foreground while gaining a highlighted background, with no tradeoff
 required (unlike the diagnostic-severity-color limitation below, fg and bg
 are genuinely independent tag slots).
 
+Both also render the line-number gutter (`Editor.LineNumberSettings()` +
+[viewmanager](viewmanager.md)'s `GutterWidth`/`GutterText`, T28,
+2026-10-17) independently — no shared rendering code between the two
+frontends, so this is real duplicated work, not a one-package change:
+`tui-base` prepends each line's gutter text as a muted-color tag inside
+`renderContent`'s per-line loop; `gui-base` prepends a gutter
+`material.Label` via a Horizontal `layout.Flex` wrapper in `renderLine`
+(falling back to its old single-widget fast path when the gutter and
+diagnostic virtual-text are both absent). The gutter shifts where column 0
+of the cursor's own text starts on screen, so both frontends' cursor/popup
+column math had to account for it: `tui-base`'s `cursorScreenCol` (feeding
+the native-cursor positioning above) and both frontends'
+`renderHoverPopup` `x` calculation each gained `+ gutterWidth` (character
+count in `tui-base`, `gutterWidth * charWidth` pixels in `gui-base`).
+
 ## Gio-specific gotchas (gui-base)
 
 Three real debugging sessions' worth of findings, worth knowing before

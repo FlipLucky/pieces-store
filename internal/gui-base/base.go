@@ -114,6 +114,12 @@ func (g *GioApp) Run() {
 				diagnostics := g.editor.DiagnosticSpans(slice.StartOffset, slice.EndOffset)
 				substitutePreview := g.editor.SubstitutePreviewRanges()
 
+				showNumber, relative := g.editor.LineNumberSettings()
+				gutterWidth := 0
+				if showNumber || relative {
+					gutterWidth = viewmanager.GutterWidth(slice.StartRow + len(slice.Lines) - 1)
+				}
+
 				layout.Stack{}.Layout(gtx,
 					layout.Expanded(func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{
@@ -121,7 +127,7 @@ func (g *GioApp) Run() {
 							Alignment: layout.Start,
 						}.Layout(gtx,
 							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-								return renderBody(gtx, g.theme, slice, spans, diagnostics, substitutePreview, cursor)
+								return renderBody(gtx, g.theme, slice, spans, diagnostics, substitutePreview, cursor, showNumber, relative, gutterWidth)
 							}),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								return renderCompletionPopup(gtx, g.theme, cursor)
@@ -135,7 +141,7 @@ func (g *GioApp) Run() {
 						)
 					}),
 					layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-						return renderHoverPopup(gtx, g.theme, cursor, g.topRow)
+						return renderHoverPopup(gtx, g.theme, cursor, g.topRow, gutterWidth)
 					}),
 				)
 
@@ -278,14 +284,14 @@ func followCursor(topRow, cursorRow, visibleRows int) int {
 
 // renderBody lays out exactly the lines in slice — never the whole
 // document — one Flex row per line.
-func renderBody(gtx layout.Context, theme *material.Theme, slice viewmanager.Slice, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, substitutePreview []offset.TextRange, cursor editor.Cursor) layout.Dimensions {
+func renderBody(gtx layout.Context, theme *material.Theme, slice viewmanager.Slice, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, substitutePreview []offset.TextRange, cursor editor.Cursor, showNumber, relative bool, gutterWidth int) layout.Dimensions {
 	children := make([]layout.FlexChild, len(slice.Lines))
 	for i, line := range slice.Lines {
 		absRow := slice.StartRow + i
 		line := line
 		lineStart := slice.LineOffsets[i]
 		children[i] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return renderLine(gtx, theme, line, absRow, lineStart, spans, diagnostics, substitutePreview, cursor)
+			return renderLine(gtx, theme, line, absRow, lineStart, spans, diagnostics, substitutePreview, cursor, showNumber, relative, gutterWidth)
 		})
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
@@ -309,7 +315,7 @@ func virtualDiagnosticText(message string) string {
 	return "  // " + message
 }
 
-func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow, lineStart int, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, substitutePreview []offset.TextRange, cursor editor.Cursor) layout.Dimensions {
+func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow, lineStart int, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, substitutePreview []offset.TextRange, cursor editor.Cursor, showNumber, relative bool, gutterWidth int) layout.Dimensions {
 	isCursorLine := absRow == cursor.Row
 	lineSpans := viewmanager.SpansForRange(spans, lineStart, lineStart+len(line))
 	lineDiagnostics := viewmanager.DiagnosticSpansForRange(diagnostics, lineStart, lineStart+len(line))
@@ -328,17 +334,29 @@ func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow, 
 	}
 
 	message, hasMessage := viewmanager.DiagnosticMessageForRange(lineDiagnostics, lineStart, lineStart+len(line))
-	if !hasMessage {
-		return lineContent(gtx)
+
+	var children []layout.FlexChild
+	if gutterWidth > 0 {
+		gutterText := viewmanager.GutterText(absRow, cursor.Row, showNumber, relative, gutterWidth)
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(theme, theme.TextSize, gutterText)
+			lbl.Font.Typeface = "monospace"
+			lbl.Color = color.NRGBA{R: 0x56, G: 0x5f, B: 0x89, A: 0xff} // same muted color as StyleComment
+			return lbl.Layout(gtx)
+		}))
 	}
-	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
-		layout.Rigid(lineContent),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+	children = append(children, layout.Rigid(lineContent))
+	if hasMessage {
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			lbl := material.Label(theme, theme.TextSize, virtualDiagnosticText(message))
 			lbl.Color = color.NRGBA{R: 0x56, G: 0x5f, B: 0x89, A: 0xff} // same muted color as StyleComment
 			return lbl.Layout(gtx)
-		}),
-	)
+		}))
+	}
+	if len(children) == 1 {
+		return lineContent(gtx)
+	}
+	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx, children...)
 }
 
 // renderStyledRunes lays a line out rune by rune — needed whenever it's
@@ -715,7 +733,10 @@ func wrapText(text string, width int) []string {
 // character widths vary. Worth revisiting with real op-recording if this
 // proves visually off enough to matter in daily use — flagged honestly
 // rather than claimed as exact.
-func renderHoverPopup(gtx layout.Context, theme *material.Theme, cursor editor.Cursor, topRow int) layout.Dimensions {
+//
+// gutterWidth (0 when the line-number gutter is off) shifts x by the same
+// number of character-widths the gutter itself occupies in renderLine.
+func renderHoverPopup(gtx layout.Context, theme *material.Theme, cursor editor.Cursor, topRow, gutterWidth int) layout.Dimensions {
 	var lines []string
 	selected := -1
 
@@ -743,7 +764,7 @@ func renderHoverPopup(gtx layout.Context, theme *material.Theme, cursor editor.C
 
 	lineHeight := lineHeightPx(gtx, theme)
 	charWidth := charWidthPx(gtx, theme)
-	x := cursor.Col * charWidth
+	x := (gutterWidth + cursor.Col) * charWidth
 	y := (cursor.Row - topRow + 1) * lineHeight // one line below the cursor's own row
 
 	popupHeight := lineHeight * len(lines)

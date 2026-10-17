@@ -297,6 +297,12 @@ func Boot(ed *editor.Editor) error {
 		diagnosticSpans := ed.DiagnosticSpans(slice.StartOffset, slice.EndOffset)
 		substitutePreview := ed.SubstitutePreviewRanges()
 
+		showNumber, relative := ed.LineNumberSettings()
+		gutterWidth := 0
+		if showNumber || relative {
+			gutterWidth = viewmanager.GutterWidth(slice.StartRow + len(slice.Lines) - 1)
+		}
+
 		var formattedLines []string
 		for i, line := range slice.Lines {
 			lineStart := slice.LineOffsets[i]
@@ -314,6 +320,10 @@ func Boot(ed *editor.Editor) error {
 			if msg, ok := viewmanager.DiagnosticMessageForRange(lineDiagnostics, lineStart, lineStart+len(line)); ok {
 				rendered += virtualDiagnosticText(msg)
 			}
+			if gutterWidth > 0 {
+				gutterText := viewmanager.GutterText(slice.StartRow+i, cursor.Row, showNumber, relative, gutterWidth)
+				rendered = fmt.Sprintf("[#565f89:%s]%s[%s:%s:U]%s", tokyoBgHex, gutterText, tokyoFgHex, tokyoBgHex, rendered)
+			}
 			formattedLines = append(formattedLines, rendered)
 		}
 
@@ -327,10 +337,10 @@ func Boot(ed *editor.Editor) error {
 		editorView.ScrollTo(scrollRow, 0)
 
 		cursorScreenRow = cursorRow - scrollRow
-		cursorScreenCol = cursor.Col
+		cursorScreenCol = cursor.Col + gutterWidth
 		cursorMode = cursor.Mode
 
-		renderHoverPopup(pages, hoverPopup, editorView, cursor, cursorRow, scrollRow)
+		renderHoverPopup(pages, hoverPopup, editorView, cursor, cursorRow, scrollRow, gutterWidth)
 
 		if completion := cursor.Completion; completion.Active && len(completion.Candidates) > 0 {
 			windowed, selected := completionWindow(completion.Candidates, completion.Index, maxCompletionRows)
@@ -493,7 +503,10 @@ func Boot(ed *editor.Editor) error {
 // computed by the caller for ScrollTo) give the cursor's row within that
 // area. Prefers showing below the cursor's line; flips above if there's
 // not enough room below, matching common completion-popup convention.
-func renderHoverPopup(pages *tview.Pages, popup *tview.TextView, editorView *tview.TextView, cursor editor.Cursor, cursorRow, scrollRow int) {
+// gutterWidth (0 when the line-number gutter is off) shifts the anchor
+// right by the same amount the gutter pushes the cursor's own screen
+// column (see renderContent's cursorScreenCol).
+func renderHoverPopup(pages *tview.Pages, popup *tview.TextView, editorView *tview.TextView, cursor editor.Cursor, cursorRow, scrollRow, gutterWidth int) {
 	innerX, innerY, innerW, innerH := editorView.GetInnerRect()
 	onScreenRow := cursorRow - scrollRow
 
@@ -554,7 +567,7 @@ func renderHoverPopup(pages *tview.Pages, popup *tview.TextView, editorView *tvi
 		height = innerH
 	}
 
-	x := innerX + cursor.Col
+	x := innerX + gutterWidth + cursor.Col
 	if x+width > innerX+innerW {
 		x = innerX + innerW - width
 	}

@@ -924,6 +924,37 @@ and: this feels nice"). First item done, the other two queued
   end-to-end through `ExecuteCommand`/`HandleKey` (14 cases, including a
   dedicated regression guard proving `y` is intercepted rather than
   falling through to yank). Both tagged builds verified clean.
+- **T28 — line numbers, with a relative/absolute toggle — shipped the same
+  day**, next in the user's own explicit sequencing ("first, add gc, line
+  number, and autocomplete"). Modeled on real vim's `number`/
+  `relativenumber` as two independent options rather than a single
+  three-way toggle — backed by a real signal, not vim-parity for its own
+  sake: a background audit of the user's own nvim dotfiles found both set
+  together, confirming the "hybrid" gutter (current line shows its
+  absolute number, every other line its relative distance) is a genuine
+  habit. New `internal/viewmanager/gutter.go` holds the pure rendering
+  math: `GutterWidth` sizes off the *currently visible* highest row, not a
+  full-document scan, matching this codebase's existing viewport-bounded-
+  cost model; `GutterText` returns one row's padded cell, empty when both
+  options are off. A real bug was caught by its own test before shipping:
+  the current-line left-aligned special case fired whenever
+  `row == cursorRow` regardless of `relative`, incorrectly left-aligning
+  the current line even under plain `:set number` — fixed by gating that
+  branch on `relative && row == cursorRow`. Toggle state is two unexported
+  `Editor` fields set via a new minimal `:set` command
+  (`internal/editor/settings.go`), reusing `exmode.Parse`'s existing `Args`
+  tokenization with zero `exmode` changes. Wired into both frontends
+  independently (no shared rendering code between them): `tui-base`
+  prepends gutter text as a muted-color tag per line; `gui-base` prepends a
+  gutter label via a new Horizontal `layout.Flex` in `renderLine`. A real,
+  easy-to-miss follow-on fix in both frontends: the gutter shifts where
+  column 0 of the cursor's own text starts on screen, so `tui-base`'s
+  `cursorScreenCol` (feeding T26's native-cursor positioning) and both
+  frontends' hover/completion-popup `x` math each needed `+ gutterWidth` —
+  caught by tracing the column math, not discovered live. Verified via
+  `internal/viewmanager/gutter_test.go` and `internal/editor/
+  settings_test.go`; `go build`/`vet`/`gofmt`/`test ./...` all clean, plus
+  both tagged `gui-local`/`tui-local` builds.
 
 ## Module & toolchain
 
