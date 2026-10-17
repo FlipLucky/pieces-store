@@ -20,10 +20,13 @@ irrelevant to it, only its shape is.
   reimplementing what they do.
 - Small, optional-capability interfaces (`hasOffset`, `hasRange`,
   `hasCount`, `hasRune`, `hasBelow`, `hasInsertion`, `hasDirection`,
-  `hasRegisterDestination`, `hasLinewise`) for pulling a payload back out
-  of an `Action` via type-assertion — one per distinct shape actually
-  needed, satisfied structurally by whatever concrete type produced the
-  `Action`.
+  `hasRegisterDestination`, `hasLinewise`, `hasForward`,
+  `hasNamedRegister`) for pulling a payload back out of an `Action` via
+  type-assertion — one per distinct shape actually needed, satisfied
+  structurally by whatever concrete type produced the `Action`.
+  `hasNamedRegister` (T24, 2026-10-11) threads a `"{letter}` register
+  selection into `DeleteRangeWithRegister`/`YankRange`, both widened with
+  a `named rune` parameter alongside the existing `RegisterType`.
 - `Dispatch(a Action, ed Editor)` — a switch on `a.Kind()`. A malformed
   `Action` (missing the payload interface its `Kind` implies, or a
   producer reporting `ok=false`) is a no-op, not a panic — the same

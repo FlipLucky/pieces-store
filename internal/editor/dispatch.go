@@ -88,6 +88,20 @@ func (e *Editor) handleCommandModeKey(key string) bool {
 }
 
 func (e *Editor) handleNormalModeKey(key string) bool {
+	// An open ":register" overview consumes the very next keystroke purely
+	// as a dismiss signal — it isn't a real Mode (see
+	// RegisterOverviewState's doc comment), so the key itself still isn't
+	// fed to keyengine afterward, same as Hover's own auto-dismiss (there,
+	// dismissal rides along on whatever the next action already does;
+	// here there's no equivalent next action to ride along on, since the
+	// overview isn't anchored to cursor movement the way Hover is).
+	if e.cursor.RegisterOverview.Active {
+		e.mu.Lock()
+		e.dismissRegisterOverviewLocked()
+		e.mu.Unlock()
+		return true
+	}
+
 	// "r" (Replace) needs the *next* raw keystroke as its argument rather
 	// than being looked up in the verb/modifier/noun tables — the same
 	// bounded, one-keystroke literal-capture primitive Insert/Command mode
@@ -149,7 +163,15 @@ func (e *Editor) handleNormalModeKey(key string) bool {
 	e.mu.Lock()
 	pos := interpreter.Position{ByteOffset: e.cursor.ByteOffset, Row: e.cursor.Row, Col: e.cursor.Col}
 	clip := interpreter.PasteClipboard{}
-	entry, ok := e.clipboardRegister.Paste()
+	var entry clipboardregister.Entry
+	var ok bool
+	if cmd.Register != 0 {
+		// "ap reads register 'a' specifically, not whatever was last
+		// deleted/yanked into the unnamed register.
+		entry, ok = e.clipboardRegister.GetValueFromNamedRegister(cmd.Register)
+	} else {
+		entry, ok = e.clipboardRegister.Paste()
+	}
 	clip.Value, clip.Linewise, clip.Ok = entry.Value, entry.Linewise, ok
 	actions := interpreter.ProcessNormal(cmd, e.table, pos, clip)
 	e.dispatchLocked(toExecutorActions(actions)...)
@@ -224,21 +246,21 @@ func (v lockedEditorView) DeleteRange(rng offset.TextRange) {
 // DeleteRangeWithRegister is DeleteRange plus storing the range's text
 // into register first — real vim's d/c both update the register they're
 // given (here, always the unnamed register plus the named one for the
-// RegisterType passed in), p/P then reads from the unnamed register.
-// linewise is recorded on the stored entry so a later paste knows whether
-// to splice charwise or insert as a fresh line.
-func (v lockedEditorView) DeleteRangeWithRegister(rng offset.TextRange, register clipboardregister.RegisterType, linewise bool) {
+// RegisterType passed in, and also the letter register in named, if any,
+// e.g. "adw). linewise is recorded on the stored entry so a later paste
+// knows whether to splice charwise or insert as a fresh line.
+func (v lockedEditorView) DeleteRangeWithRegister(rng offset.TextRange, register clipboardregister.RegisterType, linewise bool, named rune) {
 	text := string(v.e.table.GetRange(rng.Start, rng.Start+rng.Length))
-	v.e.clipboardRegister.StoreRegisterValue(text, register, linewise)
+	v.e.clipboardRegister.StoreRegisterValue(text, register, linewise, named)
 	v.DeleteRange(rng)
 }
 
-// YankRange stores the range's text into register (plus the unnamed
-// register) and moves the cursor to its start, without touching the
-// buffer — y never mutates text, only d/c do.
-func (v lockedEditorView) YankRange(rng offset.TextRange, register clipboardregister.RegisterType, linewise bool) {
+// YankRange stores the range's text into register (plus the unnamed and,
+// if set, named registers) and moves the cursor to its start, without
+// touching the buffer — y never mutates text, only d/c do.
+func (v lockedEditorView) YankRange(rng offset.TextRange, register clipboardregister.RegisterType, linewise bool, named rune) {
 	text := string(v.e.table.GetRange(rng.Start, rng.Start+rng.Length))
-	v.e.clipboardRegister.StoreRegisterValue(text, register, linewise)
+	v.e.clipboardRegister.StoreRegisterValue(text, register, linewise, named)
 	v.e.moveCursorToLocked(rng.Start, piecetable.Edit{})
 }
 

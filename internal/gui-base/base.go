@@ -125,6 +125,9 @@ func (g *GioApp) Run() {
 								return renderCompletionPopup(gtx, g.theme, cursor)
 							}),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return renderRegisterOverlay(gtx, g.theme, cursor)
+							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								return renderStatusBar(gtx, g.theme, g.editor, cursor)
 							}),
 						)
@@ -562,6 +565,44 @@ func renderCompletionPopup(gtx layout.Context, theme *material.Theme, cursor edi
 	}
 
 	popupBg := color.NRGBA{R: 0x24, G: 0x28, B: 0x3b, A: 0xff} // Tokyo Night darker background, matches the status bar
+
+	return layout.Stack{}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			defer clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops).Pop()
+			paint.ColorOp{Color: popupBg}.Add(gtx.Ops)
+			paint.PaintOp{}.Add(gtx.Ops)
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+		}),
+	)
+}
+
+// renderRegisterOverlay draws ":register"'s docked bottom panel — the
+// user's own explicit choice over a cursor-anchored popup ("i like the
+// nvim way: a bottom buffer/modal for it"), so it reuses
+// renderCompletionPopup's exact docking mechanism (a Rigid slot that
+// collapses to zero size when inactive) rather than the separate
+// layout.Stack-with-absolute-offset mechanism renderHoverPopup uses.
+func renderRegisterOverlay(gtx layout.Context, theme *material.Theme, cursor editor.Cursor) layout.Dimensions {
+	overview := cursor.RegisterOverview
+	if !overview.Active || len(overview.Lines) == 0 {
+		return layout.Dimensions{}
+	}
+
+	children := make([]layout.FlexChild, len(overview.Lines))
+	for i, line := range overview.Lines {
+		line := line
+		children[i] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(theme, theme.TextSize, line)
+			lbl.Font.Typeface = "monospace"
+			lbl.Color = theme.Palette.Fg
+			return lbl.Layout(gtx)
+		})
+	}
+
+	popupBg := color.NRGBA{R: 0x24, G: 0x28, B: 0x3b, A: 0xff} // Tokyo Night darker background, matches the status bar/completion popup
 
 	return layout.Stack{}.Layout(gtx,
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {

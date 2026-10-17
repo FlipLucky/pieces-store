@@ -47,7 +47,7 @@ func TestAppendToVisualMode(t *testing.T) {
 	}
 	for _, c := range cases {
 		for _, value := range c.input {
-			c.initial.StoreRegisterValue(value, c.registerType, false)
+			c.initial.StoreRegisterValue(value, c.registerType, false, 0)
 		}
 		register := c.initial.getRegister(c.registerType)
 		if !(slices.Equal(c.want, *register)) {

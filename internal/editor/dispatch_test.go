@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/fliplucky/pieces-store/internal/types"
@@ -119,6 +120,185 @@ func TestCountedDeleteStopsAtDocumentEnd(t *testing.T) {
 
 	if got := e.GetText(); got != "" {
 		t.Errorf("GetText() after 9dd on a 2-line buffer = %q, want %q", got, "")
+	}
+}
+
+// TestShortDeleteWord covers T22: dw is a "short delete" — a bare motion
+// swept from the cursor to wherever it lands, reusing resolveMotion
+// directly rather than resolveRangeOnce's text-construct chaining. Real
+// vim's w-motion lands on the next word's first character, so dw consumes
+// the word plus its trailing whitespace — "foo " not "foo" — distinct
+// from diw, which stops at the word boundary itself.
+func TestShortDeleteWord(t *testing.T) {
+	e := NewEditor("foo bar baz")
+	typeKeys(e, "d", "w")
+
+	if got := e.GetText(); got != "bar baz" {
+		t.Errorf("GetText() after dw = %q, want %q", got, "bar baz")
+	}
+}
+
+// TestShortDeleteWordBackward covers db: sweeps backward to the previous
+// word's start, the mirror of dw.
+func TestShortDeleteWordBackward(t *testing.T) {
+	e := NewEditor("foo bar baz")
+	for i := 0; i < 8; i++ {
+		e.MoveCursorRight() // offset 8, start of "baz"
+	}
+	typeKeys(e, "d", "b")
+
+	if got := e.GetText(); got != "foo baz" {
+		t.Errorf("GetText() after db = %q, want %q", got, "foo baz")
+	}
+}
+
+// TestShortDeleteWordEnd covers de: sweeps to the current word's last
+// character, inclusive of that character (e is an inclusive motion in
+// real vim, unlike w/b) — distinct from dw, which stops at the *next*
+// word's start and so eats trailing whitespace instead.
+func TestShortDeleteWordEnd(t *testing.T) {
+	e := NewEditor("foo bar baz")
+	typeKeys(e, "d", "e")
+
+	if got := e.GetText(); got != " bar baz" {
+		t.Errorf("GetText() after de = %q, want %q", got, " bar baz")
+	}
+}
+
+// TestShortChangeWord covers cw going through the same short-delete path
+// as dw, then entering Insert mode.
+func TestShortChangeWord(t *testing.T) {
+	e := NewEditor("foo bar")
+	typeKeys(e, "c", "w")
+
+	if got := e.GetText(); got != "bar" {
+		t.Errorf("GetText() after cw = %q, want %q", got, "bar")
+	}
+	if mode := e.GetModeInt(); mode != int(types.ModeInsert) {
+		t.Errorf("mode after cw = %d, want Insert", mode)
+	}
+}
+
+// TestShortYankWord covers yw: a short delete's yank variant — buffer stays
+// untouched, register gets the swept text.
+func TestShortYankWord(t *testing.T) {
+	e := NewEditor("foo bar")
+	typeKeys(e, "y", "w")
+
+	if got := e.GetText(); got != "foo bar" {
+		t.Errorf("GetText() after yw = %q, want unchanged %q", got, "foo bar")
+	}
+	typeKeys(e, "p")
+	if got := e.GetText(); got != "ffoo oo bar" {
+		t.Errorf("GetText() after yw p = %q, want %q", got, "ffoo oo bar")
+	}
+}
+
+// TestCountedShortDeleteWord covers 3dw: unlike 3diw (which chains whole
+// words AND whitespace runs as separate units), 3dw sweeps the w-motion
+// three times before cutting once — three whole words, confirmed against
+// real vim docs (not assumed) during this task's design discussion.
+func TestCountedShortDeleteWord(t *testing.T) {
+	e := NewEditor("one two three four")
+	typeKeys(e, "3", "d", "w")
+
+	if got := e.GetText(); got != "four" {
+		t.Errorf("GetText() after 3dw = %q, want %q", got, "four")
+	}
+}
+
+// TestNamedRegisterYankAndPaste covers T24: "ayw stores "foo " into named
+// register 'a' (in addition to the unnamed register), and "ap pastes
+// specifically from it, independent of whatever else has been
+// deleted/yanked into the unnamed register since.
+func TestNamedRegisterYankAndPaste(t *testing.T) {
+	e := NewEditor("foo bar")
+	typeKeys(e, `"`, "a", "y", "w")
+
+	// A later, unrelated bare yank (no register prefix) must not clobber
+	// register 'a' — only the unnamed/category registers.
+	for i := 0; i < 4; i++ {
+		e.MoveCursorRight() // onto "bar"
+	}
+	typeKeys(e, "y", "w")
+
+	typeKeys(e, `"`, "a", "p")
+
+	if got := e.GetText(); got != "foo bfoo ar" {
+		t.Errorf(`GetText() after "ayw, yw, "ap = %q, want %q`, got, "foo bfoo ar")
+	}
+}
+
+// TestNamedRegisterDelete covers "adw: deletes same as bare dw, but also
+// stores into named register 'a'.
+func TestNamedRegisterDelete(t *testing.T) {
+	e := NewEditor("foo bar")
+	typeKeys(e, `"`, "a", "d", "w")
+
+	if got := e.GetText(); got != "bar" {
+		t.Errorf(`GetText() after "adw = %q, want %q`, got, "bar")
+	}
+	typeKeys(e, `"`, "a", "p")
+	if got := e.GetText(); got != "bfoo ar" {
+		t.Errorf(`GetText() after "adw "ap = %q, want %q`, got, "bfoo ar")
+	}
+}
+
+// TestRegisterOverview covers T25: :register opens a non-modal overview
+// of every register category, and the very next keystroke dismisses it
+// without being otherwise acted on (same contract as Hover's
+// auto-dismiss, but driven by the keystroke itself rather than riding
+// along on cursor movement).
+func TestRegisterOverview(t *testing.T) {
+	e := NewEditor("foo bar")
+	typeKeys(e, "y", "w")
+	typeKeys(e, ":", "r", "e", "g", "i", "s", "t", "e", "r", "<Enter>")
+
+	overview := e.GetCursor().RegisterOverview
+	if !overview.Active {
+		t.Fatalf(":register did not activate the overview")
+	}
+	if len(overview.Lines) == 0 {
+		t.Fatalf(":register overview has no lines")
+	}
+	if !strings.Contains(overview.Lines[0], "foo ") {
+		t.Errorf("overview.Lines[0] = %q, want it to contain the yanked %q", overview.Lines[0], "foo ")
+	}
+
+	// The next keystroke dismisses it rather than being parsed as a
+	// Normal-mode command.
+	typeKeys(e, "l")
+	if e.GetCursor().RegisterOverview.Active {
+		t.Errorf("overview still active after a dismiss keystroke")
+	}
+	if off := e.GetCursor().ByteOffset; off != 0 {
+		t.Errorf("dismiss keystroke moved the cursor to %d, want 0 (unconsumed by keyengine)", off)
+	}
+}
+
+// TestX covers T23: x is Delete+CharForward wired as a direct — the exact
+// same short-delete path dl already goes through, just reachable with one
+// keystroke instead of two. Stores to the register like any other delete.
+func TestX(t *testing.T) {
+	e := NewEditor("foo bar")
+	typeKeys(e, "x")
+
+	if got := e.GetText(); got != "oo bar" {
+		t.Errorf("GetText() after x = %q, want %q", got, "oo bar")
+	}
+	typeKeys(e, "p")
+	if got := e.GetText(); got != "ofo bar" {
+		t.Errorf("GetText() after x p = %q, want %q", got, "ofo bar")
+	}
+}
+
+// TestCountedX covers 3x: deletes three characters under/after the cursor.
+func TestCountedX(t *testing.T) {
+	e := NewEditor("foo bar")
+	typeKeys(e, "3", "x")
+
+	if got := e.GetText(); got != " bar" {
+		t.Errorf("GetText() after 3x = %q, want %q", got, " bar")
 	}
 }
 

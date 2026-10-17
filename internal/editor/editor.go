@@ -633,6 +633,8 @@ func (e *Editor) executeCommandLocked(rawCmd string) error {
 		err = e.reportLspStatusLocked()
 	case "Format", "format":
 		err = e.startFormatLocked()
+	case "register", "registers":
+		e.openRegisterOverviewLocked()
 	default:
 		err = ErrUnknownCommand
 	}

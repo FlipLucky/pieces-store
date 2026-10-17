@@ -30,10 +30,20 @@ func CreateNormalModeModifiers() map[string]KeyAction {
 	}
 }
 
+// CreateNormalModeNouns covers nouns reached directly after a verb with no
+// modifier (dw, db, de, dh, dl — a "short delete," see
+// interpreter.resolveMotionRange) or after a modifier (diw, dip). w/p are
+// the only ones that pair with a modifier today; b/e/h/l are only ever
+// reached bare, same identities Move's own silent-motion directs already
+// use (see CreateNormalModeDirects).
 func CreateNormalModeNouns() map[string]KeyAction {
 	return map[string]KeyAction{
 		"w": {name: Word, allowedKeyActions: map[string]KeyActionName{}},
 		"p": {name: Paragraph, allowedKeyActions: map[string]KeyActionName{}},
+		"b": {name: WordBackward, allowedKeyActions: map[string]KeyActionName{}},
+		"e": {name: WordEnd, allowedKeyActions: map[string]KeyActionName{}},
+		"h": {name: CharBackward, allowedKeyActions: map[string]KeyActionName{}},
+		"l": {name: CharForward, allowedKeyActions: map[string]KeyActionName{}},
 	}
 }
 
@@ -69,5 +79,6 @@ func CreateNormalModeDirects() map[string]DirectAction {
 		"P":       {Verb: PasteBefore},
 		"f":       {Verb: FindCharForward},
 		"F":       {Verb: FindCharBackward},
+		"x":       {Verb: Delete, Noun: CharForward},
 	}
 }

@@ -58,7 +58,16 @@ conventions section.
 ## Other responsibilities
 
 - File I/O, vim-style command mode (`:w`, `:e`, `:q`/`:q!`, `:wq`,
-  `:LspInstall`/`:LspUninstall`/`:LspStatus`), `Undo`/`Redo`.
+  `:LspInstall`/`:LspUninstall`/`:LspStatus`, `:register`/`:registers`),
+  `Undo`/`Redo`.
+- `registers.go` (T25, 2026-10-11) — `:register`'s overview. Not a real
+  `Mode` (same reasoning as `HoverState`'s own doc comment): the very next
+  keystroke dismisses it, consumed by a dedicated branch at the top of
+  `handleNormalModeKey` rather than fed to `keyengine`. Builds the display
+  per the user's own proposed layout (unnamed first, then up to 3 of each
+  of yank/delete/visual, then named registers alphabetically) and
+  centralizes line formatting here rather than duplicating it per
+  frontend — see [clipboard-register](clipboard-register.md).
 - `async.go` — the answer to async orchestration: an `asyncResults`
   channel drained by one dedicated goroutine that takes `e.mu.Lock()`
   around each queued closure. Every async producer (LSP install,

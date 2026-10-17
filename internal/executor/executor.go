@@ -38,11 +38,14 @@ type Editor interface {
 	// existing callers (Insert mode's backspace, via a DeleteAction that
 	// leaves StoreInRegister false) are untouched. linewise is threaded
 	// through to the stored register entry so a later paste knows whether
-	// to splice charwise or insert as a fresh line.
-	DeleteRangeWithRegister(rng offset.TextRange, register clipboardregister.RegisterType, linewise bool)
-	// YankRange stores the range's text into register and moves the
-	// cursor to its start, without touching the buffer at all.
-	YankRange(rng offset.TextRange, register clipboardregister.RegisterType, linewise bool)
+	// to splice charwise or insert as a fresh line. named is the letter
+	// selected via a "{letter} prefix (0 for none), stored alongside the
+	// unnamed/category register rather than instead of it.
+	DeleteRangeWithRegister(rng offset.TextRange, register clipboardregister.RegisterType, linewise bool, named rune)
+	// YankRange stores the range's text into register (and, if set, the
+	// named register) and moves the cursor to its start, without touching
+	// the buffer at all.
+	YankRange(rng offset.TextRange, register clipboardregister.RegisterType, linewise bool, named rune)
 	Undo() bool
 	Redo() bool
 	SetMode(m types.Mode)
@@ -83,8 +86,9 @@ type (
 	hasRegisterDestination interface {
 		RegisterDestination() (clipboardregister.RegisterType, bool)
 	}
-	hasLinewise interface{ Linewise() bool }
-	hasForward  interface{ Forward() bool }
+	hasLinewise      interface{ Linewise() bool }
+	hasForward       interface{ Forward() bool }
+	hasNamedRegister interface{ NamedRegister() rune }
 )
 
 // Dispatch performs a, calling whichever of ed's methods its Kind maps to.
@@ -116,7 +120,11 @@ func Dispatch(a Action, ed Editor) {
 					if lp, ok := a.(hasLinewise); ok {
 						linewise = lp.Linewise()
 					}
-					ed.DeleteRangeWithRegister(rng, register, linewise)
+					var named rune
+					if np, ok := a.(hasNamedRegister); ok {
+						named = np.NamedRegister()
+					}
+					ed.DeleteRangeWithRegister(rng, register, linewise, named)
 				} else {
 					ed.DeleteRange(rng)
 				}
@@ -129,7 +137,11 @@ func Dispatch(a Action, ed Editor) {
 				if lp, ok := a.(hasLinewise); ok {
 					linewise = lp.Linewise()
 				}
-				ed.YankRange(rng, clipboardregister.Yank, linewise)
+				var named rune
+				if np, ok := a.(hasNamedRegister); ok {
+					named = np.NamedRegister()
+				}
+				ed.YankRange(rng, clipboardregister.Yank, linewise, named)
 			}
 		}
 	case types.ActionUndo:

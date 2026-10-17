@@ -98,11 +98,17 @@ type ExecutableCommand struct {
 	Verb     KeyActionName
 	Modifier KeyActionName
 	Noun     KeyActionName
+	// Register is the named register selected via a leading "{letter}
+	// prefix (e.g. "ayw, "adw, "ap) — 0 when none was selected, meaning
+	// "use the unnamed/category register only," same as real vim.
+	Register rune
 }
 
 type CommandContext struct {
 	count               int
 	countStarted        bool
+	registerPending     bool
+	register            rune
 	verb                KeyAction
 	modifier            KeyAction
 	noun                KeyAction
@@ -157,6 +163,20 @@ func (cc *CommandContext) modeTables() (verbs, modifiers, nouns map[string]KeyAc
 // check but no modifier/noun table actually defines it — a real bug in the
 // tables, not user input, and should not be treated the same as a fizzle.
 func (cc *CommandContext) ProcessCommand(keyInput string) (*ExecutableCommand, error) {
+	// 0. A register letter pending from a "{letter} prefix is a bounded,
+	// one-keystroke literal capture — same shape as Replace/FindChar's
+	// second keystroke in dispatch.go, just resolved entirely inside the
+	// parser since there's nothing to compute against buffer state. Takes
+	// priority over every other interpretation of the next key, including
+	// a digit (register letters aren't counts).
+	if cc.registerPending {
+		cc.registerPending = false
+		if runes := []rune(keyInput); len(runes) == 1 {
+			cc.register = runes[0]
+		}
+		return nil, nil
+	}
+
 	// 1. Digit accumulation for count prefixes. Unconditional on sequence
 	// state so counts still work mid-sequence (e.g. "d3w"), not just at the
 	// root (e.g. "3dw") — only special-cased for a leading "0", which is a
@@ -172,6 +192,14 @@ func (cc *CommandContext) ProcessCommand(keyInput string) (*ExecutableCommand, e
 			cc.countStarted = true
 			return nil, nil
 		}
+	}
+
+	// A register prefix is only meaningful before an operator has started
+	// (matches real vim: "a3yw and 3"ayw both select register 'a', but the
+	// quote has no meaning once a verb is already pending, e.g. mid-"diw").
+	if keyInput == `"` && cc.verb.name == None {
+		cc.registerPending = true
+		return nil, nil
 	}
 
 	verbs, modifiers, nouns, directs := cc.modeTables()
@@ -246,6 +274,7 @@ func (cc *CommandContext) finalizeDirect(d DirectAction) *ExecutableCommand {
 		Verb:     d.Verb,
 		Modifier: d.Modifier,
 		Noun:     d.Noun,
+		Register: cc.register,
 	}
 	cc.clearCommandContext()
 	return ec
@@ -255,6 +284,8 @@ func (cc *CommandContext) clearCommandContext() {
 	none := KeyAction{name: None}
 	cc.count = 1
 	cc.countStarted = false
+	cc.registerPending = false
+	cc.register = 0
 	cc.verb = none
 	cc.modifier = none
 	cc.noun = none
@@ -266,5 +297,6 @@ func (cc *CommandContext) createExecutableCommand() *ExecutableCommand {
 		Verb:     cc.verb.name,
 		Modifier: cc.modifier.name,
 		Noun:     cc.noun.name,
+		Register: cc.register,
 	}
 }

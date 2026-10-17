@@ -91,6 +91,10 @@ type DeleteAction struct {
 	Register        clipboardregister.RegisterType
 	StoreInRegister bool
 	IsLinewise      bool
+	// Named is the register letter selected via a "{letter} prefix (0
+	// means none) — threaded alongside Register/StoreInRegister so d/c
+	// also update that named register, not just the unnamed/category one.
+	Named rune
 }
 
 func (a DeleteAction) Kind() types.ActionKind          { return types.ActionDelete }
@@ -98,7 +102,8 @@ func (a DeleteAction) Range() (offset.TextRange, bool) { return a.Rng, a.Ok }
 func (a DeleteAction) RegisterDestination() (clipboardregister.RegisterType, bool) {
 	return a.Register, a.StoreInRegister
 }
-func (a DeleteAction) Linewise() bool { return a.IsLinewise }
+func (a DeleteAction) Linewise() bool      { return a.IsLinewise }
+func (a DeleteAction) NamedRegister() rune { return a.Named }
 
 // YankAction is a fully-resolved yank range: store its text into a
 // register, move the cursor to its start, never touch the buffer. Ok is
@@ -108,11 +113,13 @@ type YankAction struct {
 	Rng        offset.TextRange
 	Ok         bool
 	IsLinewise bool
+	Named      rune
 }
 
 func (a YankAction) Kind() types.ActionKind          { return types.ActionYank }
 func (a YankAction) Range() (offset.TextRange, bool) { return a.Rng, a.Ok }
 func (a YankAction) Linewise() bool                  { return a.IsLinewise }
+func (a YankAction) NamedRegister() rune             { return a.Named }
 
 // UndoAction/RedoAction carry the repeat count straight from the validated
 // command (keyengine already parsed any leading digit accumulation) —
@@ -211,7 +218,7 @@ func ProcessNormal(cmd *keyengine.ExecutableCommand, doc offset.Document, at Pos
 	case keyengine.Delete:
 		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset, count)
 		linewise := cmd.Noun == keyengine.LineMotion
-		return one(DeleteAction{Rng: rng, Ok: ok, Register: clipboardregister.Delete, StoreInRegister: ok, IsLinewise: linewise})
+		return one(DeleteAction{Rng: rng, Ok: ok, Register: clipboardregister.Delete, StoreInRegister: ok, IsLinewise: linewise, Named: cmd.Register})
 	case keyengine.Change:
 		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset, count)
 		if !ok {
@@ -219,13 +226,13 @@ func ProcessNormal(cmd *keyengine.ExecutableCommand, doc offset.Document, at Pos
 		}
 		linewise := cmd.Noun == keyengine.LineMotion
 		return []Action{
-			DeleteAction{Rng: rng, Ok: true, Register: clipboardregister.Delete, StoreInRegister: true, IsLinewise: linewise},
+			DeleteAction{Rng: rng, Ok: true, Register: clipboardregister.Delete, StoreInRegister: true, IsLinewise: linewise, Named: cmd.Register},
 			EnterInsertAction{},
 		}
 	case keyengine.Yank:
 		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset, count)
 		linewise := cmd.Noun == keyengine.LineMotion
-		return one(YankAction{Rng: rng, Ok: ok, IsLinewise: linewise})
+		return one(YankAction{Rng: rng, Ok: ok, IsLinewise: linewise, Named: cmd.Register})
 	case keyengine.Undo:
 		return one(UndoAction{RepeatCount: count})
 	case keyengine.Redo:
@@ -410,7 +417,19 @@ func resolveMotion(doc offset.Document, noun keyengine.KeyActionName, from int) 
 // Modifier+Noun combination itself isn't recognized at all — fixed for
 // the whole call, so once the first resolution succeeds every later one
 // in the chain does too; there's no per-iteration failure case to guard.
+//
+// A bare noun with no modifier (dw/cw/yw, db/cb/yb, de/ce/ye, x — anything
+// resolveMotion itself already resolves for Move) is a different
+// mechanism entirely: a "short delete," swept from the cursor to wherever
+// the motion lands, which may be a whole word or only part of one
+// depending on cursor position. No per-verb special-casing (real vim's
+// cw≈ce quirk is deliberately not replicated) — whatever the motion
+// sweeps is what gets acted on, uniformly for d/c/y. See
+// resolveMotionRange.
 func resolveRange(doc offset.Document, modifier, noun keyengine.KeyActionName, at int, count int) (offset.TextRange, bool) {
+	if modifier == keyengine.None && noun != keyengine.LineMotion {
+		return resolveMotionRange(doc, noun, at, count)
+	}
 	if count < 1 {
 		count = 1
 	}
@@ -423,6 +442,58 @@ func resolveRange(doc offset.Document, modifier, noun keyengine.KeyActionName, a
 		rng.Length = (next.Start + next.Length) - rng.Start
 	}
 	return rng, true
+}
+
+// resolveMotionRange is resolveRange's "short delete" branch: the range
+// swept from at to wherever count repetitions of a bare motion land,
+// reusing resolveMotion — the exact same single-step resolver Move itself
+// calls — rather than duplicating motion logic. Matches real vim's own
+// counting rule for operator+motion (3dw sweeps three whole word-motions,
+// not the word/whitespace alternation counted-iw uses — a different
+// command with different counting rules, confirmed against vim's own
+// docs). ok is false when the noun isn't one resolveMotion knows, or when
+// the motion doesn't actually move the cursor at all (nothing to act on).
+//
+// The final hop gets one extra adjustment intermediate hops don't:
+// isInclusiveMotion's check. e lands the cursor ON its last character
+// (so bare 'e' as Move places the cursor there), but that same character
+// must also fall inside de/ce/ye's swept range — a real, structural
+// exclusive-vs-inclusive distinction vim's own motions carry, not a
+// one-off command-pair quirk like cw≈ce, so it's resolved once here for
+// every verb rather than special-cased per verb.
+func resolveMotionRange(doc offset.Document, noun keyengine.KeyActionName, at int, count int) (offset.TextRange, bool) {
+	if count < 1 {
+		count = 1
+	}
+	target := at
+	for i := 0; i < count; i++ {
+		next, ok := resolveMotion(doc, noun, target)
+		if !ok {
+			return offset.TextRange{}, false
+		}
+		target = next
+	}
+	if target == at {
+		return offset.TextRange{}, false
+	}
+	if target < at {
+		return offset.TextRange{Start: target, Length: at - target}, true
+	}
+	if isInclusiveMotion(noun) {
+		target = offset.MoveRight(doc, target)
+	}
+	return offset.TextRange{Start: at, Length: target - at}, true
+}
+
+// isInclusiveMotion reports whether a bare motion's resolved offset is
+// itself part of the range a short delete sweeps. w/b/h land just past/
+// before their target and are exclusive by construction; l already
+// resolves to exactly one rune past "at" (the one character under the
+// cursor), already correct with no adjustment; e is the one noun that
+// genuinely needs a one-rune extension to cover the character it lands
+// on.
+func isInclusiveMotion(noun keyengine.KeyActionName) bool {
+	return noun == keyengine.WordEnd
 }
 
 // resolveRangeOnce is resolveRange's single-application resolver — same

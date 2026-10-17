@@ -270,20 +270,84 @@ nothing here needs the redesign to land first.
       doesn't support a count prefix (`3fa`) yet, since the count would
       need to be carried across the two-keystroke boundary into the
       pending state — skipped for this pass, not forgotten.
-- [ ] **T17b** — Implement `dw`/`db`/`de` (operator + bare motion delete,
-      no modifier) — currently a confirmed, silent no-op: `d` followed by
-      a bare `w`/`b`/`e` resolves to `{Verb:Delete, Modifier:None,
-      Noun:Word/...}`, which `resolveRange`/`resolveRangeOnce` has no case
-      for at all. Needs a genuinely different code path from T17's
-      text-object chaining: a range from the cursor to wherever
-      `resolveMotion` (already built, used by plain `Move`) lands, with
-      the count applied the way real vim does for `3dw`/`d3w` (three
-      whole word-motions swept over, not word/whitespace alternation the
-      way counted `diw` works — these are two different vim commands with
-      different counting rules, confirmed against vim's own docs 2026-10-
-      11). (M, 🤖 or 🔧 — the hard part, `resolveMotion`, already exists;
-      this is mostly a new `resolveRange`-shaped function for the
-      Delete-with-no-modifier case plus wiring it into `ProcessNormal`.)
+- [x] **T17b / T22** — "Short delete": `d`/`c`/`y` + a bare motion
+      (`dw`/`db`/`de`/`dh`/`dl`, and `cw`/`yw`/... alongside them), no
+      modifier. Done 2026-10-11, renamed T22 as the user scoped it
+      uniformly across all three verbs rather than Delete alone. New
+      `interpreter.resolveMotionRange` reuses `resolveMotion` (the exact
+      single-step resolver plain `Move` already calls) rather than
+      duplicating motion logic, folded into `resolveRange` as its
+      `modifier == None && noun != LineMotion` branch. `3dw` sweeps three
+      whole word-motions (not word/whitespace alternation the way counted
+      `diw` does — confirmed against real vim docs, two genuinely
+      different commands). `keyengine.CreateNormalModeNouns` gained
+      `b`/`e`/`h`/`l` entries (previously only reachable as Move-only
+      directs, so `db`/`de`/`dh`/`dl` fizzled with no resolved command at
+      all).
+      **Two real bugs caught by testing against actual vim semantics
+      before asserting them, not just assumed**: (1) `offset.
+      MotionWordBackward` never moved at all when the cursor already sat
+      on a word's first character (`spanStart` resolved to the same
+      position) — real vim's `b` jumps to the *previous* word in that
+      case; fixed by stepping back one rune first, mirroring
+      `MotionWordForward`'s own "exit the current word first" shape. (2)
+      `e` is an *inclusive* motion in real vim (the landing character is
+      part of the swept range) while `w`/`b`/`h` are exclusive — handled
+      once, generically, via `isInclusiveMotion` in
+      `resolveMotionRange` rather than special-cased per verb; `l` is
+      already correct by construction (one rune swept, nothing to adjust).
+      See `TestShortDeleteWord(Backward|End)`/`TestShortChangeWord`/
+      `TestShortYankWord`/`TestCountedShortDeleteWord` in
+      `internal/editor/dispatch_test.go`.
+- [x] **T23** — `x` wired as a direct: `{Verb: Delete, Noun: CharForward}`
+      in `CreateNormalModeDirects`, reusing T22's short-delete path
+      end to end (no new logic needed — `x` is just `dl` reachable in one
+      keystroke). `3x` deletes three characters via the same count-chained
+      loop. See `TestX`/`TestCountedX`.
+- [x] **T24** — Named registers (lowercase only, per the user: "i didnt
+      even know vim had an uppercase named register. lowercase is
+      enough"). `"{letter}` prefix parsing in `keyengine.CommandContext.
+      ProcessCommand` (a one-keystroke literal capture, same shape as
+      Replace/FindChar's second keystroke, works whether the register
+      comes before or after a count — `"a3yw` and `3"ayw` both work).
+      `keyengine.ExecutableCommand.Register rune` threads through;
+      `clipboard-register`'s `namedRegister` widened from `map[rune]string`
+      to `map[rune]Entry` (single-value, no history, unlike the category
+      registers), `StoreRegisterValue` takes a `named rune` parameter.
+      `interpreter.DeleteAction`/`YankAction` gained `Named rune` +
+      `NamedRegister() rune`; `executor`'s new `hasNamedRegister`
+      capability threads it into `DeleteRangeWithRegister`/`YankRange`,
+      both widened with a `named rune` parameter. `"ap` reads from the
+      named register specifically (`dispatch.go`'s paste-snapshot branches
+      on `cmd.Register != 0` before falling back to the unnamed register's
+      `Paste()`). See `TestNamedRegisterYankAndPaste`/
+      `TestNamedRegisterDelete`.
+- [x] **T25** — `:register`/`:registers` command + UI. Done 2026-10-11, as
+      a **docked bottom panel** per the user's explicit choice ("i like
+      the nvim way: a bottom buffer/modal for it") over the cursor-
+      anchored hover/LSP-completion popup mechanism — reuses the exact
+      docking pattern already backing the `:e`/`:w` completion popup in
+      both frontends (Gio's zero-size-when-inactive `layout.Rigid`;
+      tview's `flex.ResizeItem(view, 0, 0)` collapse). New
+      `Cursor.RegisterOverview RegisterOverviewState{Active, Lines
+      []string}` — not a real `Mode` (same reasoning as `HoverState`):
+      dismissed by whatever keystroke arrives next, consumed purely as a
+      dismiss signal by a new branch at the very top of
+      `handleNormalModeKey` (before `pendingReplace`), rather than fed to
+      `keyengine`. New `internal/editor/registers.go`:
+      `openRegisterOverviewLocked` (wired into `executeCommandLocked`'s
+      `"register"/"registers"` case) builds the overview per the user's
+      own proposed layout — unnamed first (if set), then up to 3 of each
+      of yank/delete/visual (skipped when empty), then every named
+      register in letter order; `formatRegisterLine` centralizes
+      display formatting (truncation, newline-collapsing) in `Editor`
+      itself rather than duplicating it per frontend — a deliberate
+      departure from the diagnostic-virtual-text precedent, justified
+      since this is pure string logic with zero toolkit dependency, unlike
+      per-frontend color mappings. New `ClipboardRegister.TopEntries`/
+      `NamedEntries`/`GetValueFromNamedRegister` read methods. New
+      `renderRegisterOverlay` (gui-base) / `registerView` (tui-base). See
+      `TestRegisterOverview`.
 
 ## Longer horizon — browse, don't start yet
 

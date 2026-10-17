@@ -708,6 +708,63 @@ tested `f{char}` motion primitive that was never wired into any
 unilaterally wiring it up or deleting it, since both are legitimate calls
 only the user should make).
 
+**Clipboard taken from PoC to MVP level, 2026-10-11** — prompted by a
+direct critique ("its poc, not mvp level... if i look at clipboard, and i
+look at nvim, i would expect the following: d, c and y all work with the
+motions, [...] the named clipboard, and the visual overview of the
+clipboard"). Four tasks landed in one pass (`ATOMIC_TASKS.md`'s T22–T25):
+
+- **Short delete** (T22/T17b) — `d`/`c`/`y` plus a bare motion (`dw`,
+  `db`, `de`, `dh`, `dl`), the user's own named distinction from a "text
+  construct" like `diw` (a complete semantic unit) — a short delete is
+  "a bare motion swept from cursor to wherever it lands, possibly a whole
+  word or half of one." New `interpreter.resolveMotionRange` reuses
+  `resolveMotion` (the single-step resolver plain `Move` already calls)
+  rather than duplicating motion logic, folded into `resolveRange` as a
+  branch keyed on `modifier == None && noun != LineMotion`. Deliberately
+  uniform across d/c/y with no vim-style `cw`≈`ce` special-casing — the
+  one genuine exception is motion inclusivity (`e` lands ON its target
+  character in real vim; `w`/`b`/`h` land just past/before theirs),
+  handled once via `isInclusiveMotion` since it's a structural property
+  of the motion itself, not a one-off command-pair quirk. Caught two real
+  bugs by checking real vim semantics before asserting them (a discipline
+  this session got pushed back into once already, over T17/`3diw`):
+  `offset.MotionWordBackward` never moved when the cursor already sat on
+  a word's first character (real vim's `b` jumps to the *previous* word
+  there), and `e`'s range needed exactly the inclusivity fix above.
+- **`x`** (T23) — wired as a direct reusing T22's path end to end (`x` is
+  just `dl` in one keystroke, no new logic).
+- **Named registers** (T24) — lowercase only, per the user ("i didnt even
+  know vim had an uppercase named register. lowercase is enough"). A
+  `"{letter}` prefix is a one-keystroke literal capture in `keyengine`
+  (works before or after a count, `"a3yw`/`3"ayw` both parse), threaded
+  through `ExecutableCommand.Register` → `interpreter`'s
+  `DeleteAction`/`YankAction.Named` → `executor`'s new
+  `hasNamedRegister` capability → `clipboard-register`'s `namedRegister`
+  (widened from `map[rune]string` to `map[rune]Entry`, single-value, no
+  history, unlike the category registers).
+- **`:register`/`:registers`** (T25) — a **docked bottom panel**, the
+  user's explicit, direct preference over the cursor-anchored hover/LSP-
+  completion popup style ("i like the nvim way: a bottom buffer/modal for
+  it"): reuses the exact mechanism already backing the `:e`/`:w`
+  completion popup in both frontends (Gio's zero-size-when-inactive
+  `layout.Rigid`; tview's `flex.ResizeItem(view, 0, 0)` collapse) rather
+  than inventing a third UI pattern. New `Cursor.RegisterOverview` is not
+  a real `Mode` (same reasoning as `HoverState`): the very next keystroke
+  dismisses it without being parsed by `keyengine` at all. Layout follows
+  the user's own proposed shape: unnamed register first (if set), then up
+  to 3 of each of yank/delete/visual (skipped when empty), then every
+  named register in letter order. Register-line formatting is centralized
+  once in `Editor` (`registers.go`'s `formatRegisterLine`) rather than
+  duplicated per frontend — a deliberate departure from the diagnostic-
+  virtual-text precedent, justified since this is pure string logic with
+  no toolkit dependency, unlike per-frontend color mappings.
+
+All four verified against the real `HandleKey` path, not just unit-level
+resolver tests — see `internal/editor/dispatch_test.go`'s
+`TestShortDelete*`/`TestX`/`TestNamedRegister*`/`TestRegisterOverview`.
+Both tagged `gui-local`/`tui-local` builds verified clean.
+
 ## Module & toolchain
 
 - Module: `github.com/fliplucky/pieces-store`

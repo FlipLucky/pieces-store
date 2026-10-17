@@ -98,15 +98,24 @@ func MotionWordForward(doc Document, currentOffset int) int {
 	return nextWordStart
 }
 
-// b: Move backward to the beginning of the current or previous word
+// b: Move backward to the beginning of the previous word (or the current
+// one, if the cursor isn't already sitting on its first character).
+// Steps back one rune first, mirroring MotionWordForward's own "exit the
+// current word first" shape — without it, a cursor already sitting on a
+// word's first character would resolve spanStart against that same word
+// and report zero movement instead of jumping to the previous word, same
+// bug class TestWordAtDocumentStart already documents for the
+// start-of-document edge.
 func MotionWordBackward(doc Document, currentOffset int) int {
-	// If we are currently sitting on a non-word char, find the previous word character first
-	r, _ := doc.GetRuneAt(currentOffset)
-	if !IsWordChar(r) {
-		currentOffset = FindOffset(doc, currentOffset, Backward, IsWordChar)
+	pos := stepRune(doc, currentOffset, Backward)
+
+	// Landed on a non-word char (whitespace between words, or pinned at
+	// offset 0 with nothing behind it): find the previous word char first.
+	if r, _ := doc.GetRuneAt(pos); !IsWordChar(r) {
+		pos = FindOffset(doc, pos, Backward, IsWordChar)
 	}
 
-	return spanStart(doc, currentOffset, IsWordChar)
+	return spanStart(doc, pos, IsWordChar)
 }
 
 // e: Move forward to the end of the current or next word.

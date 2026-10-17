@@ -40,19 +40,32 @@ type LSPCompletionState struct {
 	Index  int
 }
 
+// RegisterOverviewState is an in-progress ":register"/":registers" display
+// — not a real Mode (same reasoning as HoverState): it's dismissed by
+// whatever key arrives next, not a distinct part of the mode grammar.
+// Lines are already fully formatted display strings (see registers.go's
+// formatRegisterLine) — frontends render them verbatim in a docked panel,
+// the same mechanism already backing the :e/:w completion popup, rather
+// than the cursor-anchored hover/LSP-completion popup.
+type RegisterOverviewState struct {
+	Active bool
+	Lines  []string
+}
+
 // Cursor is editor state — position, mode, the in-progress command
 // buffer, and any in-progress command-line/LSP completion or hover popup —
 // not view state. Frontends read it for rendering, but it lives here
 // because Editor owns it end-to-end.
 type Cursor struct {
-	ByteOffset    int
-	Row           int
-	Col           int
-	Mode          types.Mode
-	CommandBuffer string
-	Completion    CompletionState
-	LSPCompletion LSPCompletionState
-	Hover         HoverState
+	ByteOffset       int
+	Row              int
+	Col              int
+	Mode             types.Mode
+	CommandBuffer    string
+	Completion       CompletionState
+	LSPCompletion    LSPCompletionState
+	Hover            HoverState
+	RegisterOverview RegisterOverviewState
 }
 
 func NewCursor() *Cursor {

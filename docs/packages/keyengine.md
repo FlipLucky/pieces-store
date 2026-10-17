@@ -18,9 +18,23 @@ cycle with `editor` or with [offset](offset.md).
 - `normal_mode.go` — the real, populated tables. A fourth table beyond
   verb/modifier/noun, `availableDirects`, covers keys that execute
   immediately with no further input (`w`/`b`/`e`, `h`/`j`/`k`/`l` +
-  arrows, `u`/`<C-r>`/`r`, `:`/`i`/`o`/`O`, `p`/`P`).
+  arrows, `u`/`<C-r>`/`r`, `:`/`i`/`o`/`O`, `p`/`P`, `x`). `b`/`e`/`h`/`l`
+  are also registered as **nouns** (2026-10-11, T22) — reachable bare
+  after a verb with no modifier (`dw`/`db`/`de`/`dh`/`dl`, a "short
+  delete," see [interpreter](interpreter.md)) — alongside their existing
+  Move-only direct entries.
 - `visual_mode.go` — placeholder scaffolding only; no Visual keybinding is
   implemented yet.
+
+## Named register prefix (`"{letter}`, T24, 2026-10-11)
+
+A one-keystroke literal capture — same shape as Replace/FindChar's second
+keystroke, just resolved entirely inside the parser rather than needing
+any buffer state. `cc.registerPending`/`cc.register` sit ahead of digit
+accumulation in `ProcessCommand`'s priority order, but the quote itself is
+only recognized when `cc.verb.name == None` — so both `"a3yw` and `3"ayw`
+parse to the same command, matching real vim. Resolves into
+`ExecutableCommand.Register rune` (0 means none selected).
 
 ## The "directs vs. nouns" non-collision
 

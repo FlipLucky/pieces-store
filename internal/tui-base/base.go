@@ -214,17 +214,28 @@ func Boot(ed *editor.Editor) error {
 	completionView.SetBackgroundColor(tokyoStatusBg)
 	completionView.SetTextColor(tokyoFg)
 
+	// ":register"/":registers" overview — the user's explicit choice of a
+	// docked bottom panel over a cursor-anchored popup ("i like the nvim
+	// way: a bottom buffer/modal for it"), so it reuses completionView's
+	// exact ResizeItem docking mechanism rather than hoverPopup's
+	// tview.Pages/exact-cell-positioning one below.
+	registerView := tview.NewTextView().
+		SetDynamicColors(true)
+	registerView.SetBackgroundColor(tokyoStatusBg)
+	registerView.SetTextColor(tokyoFg)
+
 	// Bottom Vim status bar
 	statusBar := tview.NewTextView().
 		SetDynamicColors(true)
 	statusBar.SetBackgroundColor(tokyoStatusBg)
 
-	// Layout: editor filling top space, completion popup + status bar at
-	// the bottom.
+	// Layout: editor filling top space, completion popup + register
+	// overview + status bar at the bottom.
 	flex := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(editorView, 0, 1, true).
 		AddItem(completionView, 0, 0, false).
+		AddItem(registerView, 0, 0, false).
 		AddItem(statusBar, 1, 0, false)
 
 	// hoverPopup is the cursor-anchored floating popup for LSP hover and
@@ -325,6 +336,14 @@ func Boot(ed *editor.Editor) error {
 		} else {
 			completionView.SetText("")
 			flex.ResizeItem(completionView, 0, 0)
+		}
+
+		if overview := cursor.RegisterOverview; overview.Active && len(overview.Lines) > 0 {
+			registerView.SetText(strings.Join(overview.Lines, "\n"))
+			flex.ResizeItem(registerView, len(overview.Lines), 0)
+		} else {
+			registerView.SetText("")
+			flex.ResizeItem(registerView, 0, 0)
 		}
 
 		if cursor.Mode == types.ModeCommand {
