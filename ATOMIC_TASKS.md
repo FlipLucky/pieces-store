@@ -1,9 +1,10 @@
 # Atomic Tasks
 
 A prioritized, pick-up-anytime queue — unlike `BACKLOG.md` (a sidebar list,
-not ordered) and `VIM_ACTION_CHECKLIST.md`/`IDE_FEATURE_CHECKLIST.md` (full,
-deliberately unprioritized inventories for weekend reading), this file is
-the actual next few things to do, each sized to finish in one sitting.
+not ordered) and `FEATURES.md`'s Future section (the staged, deliberately
+unprioritized roadmap — the stable plan of record this queue pulls from),
+this file is the actual next few things to do, each sized to finish in one
+sitting.
 Each item has a stable ID — say "do T4" rather than re-describing it.
 Where an item leans on a named project principle, it links into the wiki's
 Concepts section (`docs/concepts/`) instead of re-explaining that
@@ -753,7 +754,8 @@ sorted every remaining candidate into: already done (stale checkbox only),
 trivial reuse, small-new-primitive, or genuinely-excluded (Visual mode,
 macros, marks, undo tree, dot-repeat, viewport-relative motions, and
 anything depending on T31's search existing first — these stay tracked in
-`VIM_ACTION_CHECKLIST.md` itself, not duplicated here). Queued (exact
+`FEATURES.md`'s Future section now, since `VIM_ACTION_CHECKLIST.md` itself
+was merged there and deleted 2026-10-17). Queued (exact
 ordering against T27/T28/T30/T31/T32 above deliberately left open — "decide
 order later"), grouped by shape rather than as one giant task or 20 tiny
 ones:
@@ -833,8 +835,9 @@ same `:h` entry point later, e.g. `:h daw` for a full explanation).
       themselves** (adding a short `Description` field to each table
       entry/`DirectAction`), not a hand-maintained parallel list — the
       exact staleness failure this task's own audit just found in
-      `VIM_ACTION_CHECKLIST.md` is precisely what a second, separately-
-      maintained list would reproduce. New UI shape, not a reuse of
+      `VIM_ACTION_CHECKLIST.md` (since merged into `FEATURES.md` and
+      deleted) is precisely what a second, separately-maintained list
+      would reproduce. New UI shape, not a reuse of
       `RegisterOverview`'s mechanism: that one is "any key dismisses,"
       but a scrollable list needs real scroll-key handling (`j`/`k`/
       arrows/`<C-d>`/`<C-u>`) before an explicit close key (`q`/`<Esc>`) —
@@ -879,8 +882,9 @@ same `:h` entry point later, e.g. `:h daw` for a full explanation).
   style shorthands, `\1` instead of Go's `$1`) rather than "add regex" from
   scratch — confirm which before scoping real work here.
 - Search, macros, marks, splits/multi-buffer, folding, autocommands — see
-  `VIM_ACTION_CHECKLIST.md` and `IDE_FEATURE_CHECKLIST.md` for the full
-  unprioritized inventory; `FEATURES.md`'s Stage 3+ for sequencing.
+  `FEATURES.md`'s Future section for the full staged inventory and
+  sequencing (absorbed `VIM_ACTION_CHECKLIST.md`/`IDE_FEATURE_CHECKLIST.md`
+  in full, 2026-10-17; both are deleted now).
 
 ---
 
