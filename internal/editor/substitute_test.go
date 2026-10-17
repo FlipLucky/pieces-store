@@ -154,19 +154,67 @@ func TestSubstitutePreviewRangesEmptyOutsideCommandMode(t *testing.T) {
 	}
 }
 
-// TestSubstitutePreviewRangesEmptyWhileStillTyping covers the common,
-// expected-to-be-silent case: the pattern's closing delimiter hasn't been
-// typed yet, so there's nothing valid to preview — must not error or
-// panic on every keystroke, same as real nvim's own live preview.
-func TestSubstitutePreviewRangesEmptyWhileStillTyping(t *testing.T) {
+// TestSubstitutePreviewRangesEmptyBeforeAnyPatternTyped covers the two
+// genuinely-nothing-to-preview-yet states: no delimiter typed at all
+// ("s"), and the delimiter typed but no pattern after it yet ("s/") — must
+// not error or panic on every keystroke, same as real nvim.
+func TestSubstitutePreviewRangesEmptyBeforeAnyPatternTyped(t *testing.T) {
 	e := NewEditor("foo bar")
 	e.cursor.Mode = types.ModeCommand
 
-	for _, partial := range []string{"s", "s/", "s/fo", "s/foo"} {
+	for _, partial := range []string{"s", "s/"} {
 		e.cursor.CommandBuffer = CommandBuffer(partial)
 		if got := e.SubstitutePreviewRanges(); got != nil {
 			t.Errorf("SubstitutePreviewRanges() with buffer %q = %v, want nil", partial, got)
 		}
+	}
+}
+
+// TestSubstitutePreviewRangesUpdatesProgressivelyAsPatternIsTyped is the
+// actual bug this test file is guarding against now: highlighting must
+// appear as soon as a real (if incomplete) pattern exists — "s/fo" already
+// highlights every "fo" — narrowing live as more of the pattern is typed,
+// not waiting for the closing delimiter the way the first version of this
+// feature incorrectly did (real nvim's own incsearch behaves the same
+// way: the highlight tracks the pattern as it's typed, not just once the
+// whole :s command is complete).
+func TestSubstitutePreviewRangesUpdatesProgressivelyAsPatternIsTyped(t *testing.T) {
+	e := NewEditor("foo bar\nfoo baz")
+
+	cases := []struct {
+		buffer    string
+		wantCount int
+	}{
+		{"s/fo", 1},    // no closing delimiter yet — still highlights
+		{"s/foo", 1},   // still no closing delimiter
+		{"s/foo/", 1},  // now complete, no change in count
+		{"s/foo/x", 1}, // typing the replacement doesn't touch match count
+	}
+	for _, c := range cases {
+		e.cursor.Mode = types.ModeCommand
+		e.cursor.CommandBuffer = CommandBuffer(c.buffer)
+		if got := e.SubstitutePreviewRanges(); len(got) != c.wantCount {
+			t.Errorf("SubstitutePreviewRanges() with buffer %q = %v (len %d), want %d match(es)", c.buffer, got, len(got), c.wantCount)
+		}
+	}
+}
+
+// TestSubstitutePreviewRangesGFlagOnlyAppliesOnceTyped covers the "g"
+// flag's effect only kicking in once its own segment actually exists —
+// typing the replacement first must not retroactively behave as if "g"
+// were already there.
+func TestSubstitutePreviewRangesGFlagOnlyAppliesOnceTyped(t *testing.T) {
+	e := NewEditor("foo foo foo")
+	e.cursor.Mode = types.ModeCommand
+
+	e.cursor.CommandBuffer = "s/foo/bar"
+	if got := e.SubstitutePreviewRanges(); len(got) != 1 {
+		t.Errorf("SubstitutePreviewRanges() before g = %v, want 1 match", got)
+	}
+
+	e.cursor.CommandBuffer = "s/foo/bar/g"
+	if got := e.SubstitutePreviewRanges(); len(got) != 3 {
+		t.Errorf("SubstitutePreviewRanges() with g = %v, want 3 matches", got)
 	}
 }
 

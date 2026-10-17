@@ -67,16 +67,23 @@ string already supports `$1`/`$name` capture-group references (not vim's
 own `\1` syntax) since `regexp.ReplaceAllString` interprets them natively.
 
 Live match highlighting while typing a substitute — nvim's own
-"inccommand" preview — shipped 2026-10-17 (T29): `executeSubstituteLocked`'s
-match-finding logic was factored out into a shared
-`findSubstituteMatchesLocked`, so `Editor.SubstitutePreviewRanges()` (parses
-the in-progress `CommandBuffer` via `Parse`/`ParseSubstitute` on every
-render, silent rather than erroring on an incomplete/invalid command) and
-real execution stay in sync by construction rather than by two copies of
-the same scan. See [Front ends](frontends.md) for how each frontend
-renders the resulting highlight. The `c` (confirm) flag — real per-match
-y/n/a/q/l interactivity — is a deliberate, queued follow-up
-(`ATOMIC_TASKS.md`'s T30), not done yet.
+"incsearch"/"inccommand" preview — shipped 2026-10-17 (T29):
+`executeSubstituteLocked`'s match-finding logic was factored out into a
+shared `findSubstituteMatchesLocked`, so `Editor.SubstitutePreviewRanges()`
+and real execution stay in sync by construction rather than by two copies
+of the same scan. `ParseSubstitute`'s own segment-splitting was in turn
+split out into a new, lenient `SplitSubstituteSegments` (no minimum-
+segment-count requirement — `ParseSubstitute` now just adds that
+requirement on top) specifically so the preview can react to an
+*in-progress* pattern: a real bug in the first version required a
+complete `pattern/replacement/` before highlighting anything (`:s/hel`
+showed nothing), when real nvim narrows the highlight live as the pattern
+itself is typed, before any closing delimiter exists — fixed the same day
+it was caught via real use. See [Front ends](frontends.md) for how each
+frontend renders the resulting highlight. The `c` (confirm) flag — real
+per-match y/n/a/q/l interactivity — is queued next (`ATOMIC_TASKS.md`'s
+T30, bumped ahead of the UX-polish queue per the user's own workflow), not
+done yet.
 
 ## Depends on
 

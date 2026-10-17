@@ -122,15 +122,23 @@ func (e *Editor) findSubstituteMatchesLocked(re *regexp.Regexp, global, wholeBuf
 
 // SubstitutePreviewRanges returns the buffer ranges a :s/:%s command
 // currently being typed in Command mode would act on, for a frontend to
-// highlight live — nvim's own "inccommand" preview, scoped here to
-// highlighting the matches themselves rather than previewing the replaced
-// text in place (a bigger feature — it would need a non-committed, purely
-// visual overlay edit — deliberately deferred past this first pass).
-// Empty whenever the command buffer isn't even shaped like a substitute
-// yet: wrong command name, no closing delimiter typed, an empty pattern,
-// or a pattern that doesn't compile. Typing is naturally incomplete most
-// of the time, so this stays silent on all of those rather than erroring
-// on every keystroke — same as real nvim's own live preview.
+// highlight live — nvim's own "incsearch"/"inccommand" preview, scoped
+// here to highlighting the matches themselves rather than previewing the
+// replaced text in place (a bigger feature — it would need a non-
+// committed, purely visual overlay edit — deliberately deferred past this
+// first pass). Updates progressively as the pattern itself is typed, not
+// just once the whole command is complete: SplitSubstituteSegments (not
+// the stricter ParseSubstitute, which requires a full pattern/replacement/
+// flags triple) is used specifically so "s/hel" already highlights every
+// match of "hel", exactly like typing a search pattern incrementally
+// narrows/moves nvim's own incsearch highlight. The "g" flag only takes
+// effect once its segment has actually been typed (i.e. once a
+// replacement segment already exists) — matching how real execution reads
+// it, not a moment earlier. Empty whenever the command buffer isn't even
+// shaped like a substitute yet: wrong command name, no delimiter typed at
+// all, an empty pattern, or a pattern that doesn't compile. Typing is
+// naturally incomplete most of the time, so this stays silent on all of
+// those rather than erroring on every keystroke — same as real nvim.
 func (e *Editor) SubstitutePreviewRanges() []offset.TextRange {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -145,15 +153,15 @@ func (e *Editor) substitutePreviewRangesLocked() []offset.TextRange {
 	if cmd.Name != "s" && cmd.Name != "substitute" {
 		return nil
 	}
-	sub, ok := exmode.ParseSubstitute(cmd.Raw)
-	if !ok || sub.Pattern == "" {
+	segments, _, ok := exmode.SplitSubstituteSegments(cmd.Raw)
+	if !ok || segments[0] == "" {
 		return nil
 	}
-	re, err := regexp.Compile(sub.Pattern)
+	re, err := regexp.Compile(segments[0])
 	if err != nil {
 		return nil
 	}
-	global := strings.Contains(sub.Flags, "g")
+	global := len(segments) >= 3 && strings.Contains(segments[2], "g")
 
 	matches := e.findSubstituteMatchesLocked(re, global, cmd.WholeBuffer)
 	ranges := make([]offset.TextRange, len(matches))

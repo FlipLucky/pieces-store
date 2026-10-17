@@ -876,13 +876,27 @@ and: this feels nice"). First item done, the other two queued
   editor when i use :s and %s, like nvim"). Scoped deliberately to
   highlighting the matches themselves while a substitute is still being
   typed, not previewing the replaced text in place — real nvim's fuller
-  `inccommand=nosplit` behavior, left for later if actually wanted, since
-  it would need a non-committed visual overlay edit, a bigger feature.
-  `executeSubstituteLocked`'s match-scanning logic was factored out into a
-  shared `findSubstituteMatchesLocked` so a new `Editor.SubstitutePreviewRanges()`
-  (parses the live `CommandBuffer` every render, silent — not erroring —
-  whenever it isn't yet shaped like a complete substitute) and real
-  execution can't drift apart. Rendering differs by necessity per
+  `inccommand=nosplit` behavior, deliberately queued as a separate,
+  lower-priority longer-horizon item instead (see `ATOMIC_TASKS.md`), since
+  it needs a genuinely new rendering mechanism: every renderer in this
+  codebase today assumes on-screen text is literally the buffer's own
+  bytes, and showing substituted text in place would mean a second,
+  display-only code path that splices replacement text into a line and
+  re-derives its column math so the cursor and every other overlay still
+  land correctly. `executeSubstituteLocked`'s match-scanning logic was
+  factored out into a shared `findSubstituteMatchesLocked` so a new
+  `Editor.SubstitutePreviewRanges()` and real execution can't drift apart.
+  **A real bug, found via live testing the same day and fixed
+  immediately**: the first version required a *complete*
+  `pattern/replacement/` before highlighting anything, so `:s/hel`/
+  `:s/hello` showed nothing — wrong against real nvim, whose incsearch
+  narrows the highlight live as the pattern itself is typed, before any
+  closing delimiter exists. Fixed by splitting `exmode.ParseSubstitute`'s
+  strict segment-count requirement out into a new, lenient
+  `exmode.SplitSubstituteSegments` (`ParseSubstitute` itself now calls it)
+  that `SubstitutePreviewRanges` uses directly — matches now narrow live
+  as the pattern grows, and the `g` flag only takes effect once its own
+  segment has actually been typed. Rendering differs by necessity per
   frontend: `gui-base` layers a new full-cell background fill underneath
   each matched glyph (no toolkit limitation, same non-destructive layering
   `withDiagnosticUnderline` already uses); `tui-base` had to actually grow
@@ -890,10 +904,12 @@ and: this feels nice"). First item done, the other two queued
   hardcoded to the editor's own bg color, now independently settable per
   rune so a match's syntax-color foreground survives underneath its own
   highlighted background. Both use the same highlight color (`#515c7e`,
-  Tokyo Night's visual-selection shade) for consistency. The `c`
-  (confirm) flag itself — real per-match y/n/a/q/l interactivity, not just
-  a highlight — is queued as a deliberate follow-up (`ATOMIC_TASKS.md`'s
-  T30) that reuses this same preview machinery rather than a parallel one.
+  Tokyo Night's visual-selection shade) for consistency.
+- **The `c` (confirm) flag bumped ahead of T27/T28** per the user's own
+  real workflow ("i often change a word's part with %s/gc... c is already
+  a habit; %s feels incomplete without it") — see `ATOMIC_TASKS.md`'s T30,
+  not built yet, reusing T29's match-finding/highlight machinery for real
+  per-match y/n/a/q/l interactivity rather than a parallel mechanism.
 
 ## Module & toolchain
 

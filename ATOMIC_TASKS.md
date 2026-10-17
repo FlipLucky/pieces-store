@@ -418,13 +418,87 @@ all ranges as originally planned — the rest of the original staging
       `renderRegisterOverlay` (gui-base) / `registerView` (tui-base). See
       `TestRegisterOverview`.
 
-## 6. UX polish pass — "works" vs. "feels nice" (2026-10-17)
+## 6. Live `:s///` match highlighting — "inccommand" (2026-10-17)
+
+Raised directly off the back of T13-T15's `:s///`/`:%s///` work ("i want
+to highlight the code in the editor when i use :s and %s, like nvim").
+Scoped via an explicit choice between nvim's two related "highlight while
+using :s" behaviors — the live-preview-while-typing one first, the `c`
+flag's own per-match confirm-prompt highlighting as a deliberate follow-up
+rather than both at once. **T30 bumped ahead of section 7's T27/T28**
+per the user's own real workflow ("i often change a word's part with
+%s/gc, but sometimes it's part of a word I don't want to change, or of an
+import — c is already a habit; %s feels incomplete without it").
+
+- [x] **T29 — Live preview highlighting while typing `:s`/`:%s`.** Done
+      2026-10-17, then corrected same day after real use surfaced a scoping
+      bug. `executeSubstituteLocked`'s line-scanning logic (current-line-
+      only by default, every line on `%`, first match per line unless `g`)
+      was factored out into a shared `findSubstituteMatchesLocked` so
+      execution and preview can't drift apart — one
+      `substituteMatchLoc{Start,End,Text}` scan feeds both. New
+      `Editor.SubstitutePreviewRanges() []offset.TextRange`, silent
+      (returns nil, never errors) whenever the buffer isn't shaped like a
+      substitute at all, or the pattern is empty/doesn't compile as RE2.
+      New `viewmanager.SubstitutePreviewContains`/
+      `SubstitutePreviewRangesForRange` reuse `offset.TextRange` directly
+      rather than a new span type. Deliberately still scoped to
+      highlighting the matches themselves, not previewing the replaced
+      text in place (nvim's full `inccommand=nosplit` behavior) — see the
+      Longer-horizon entry below for why that's a separate, bigger task.
+      **The bug, found via real testing**: the first version required a
+      *complete* `pattern/replacement/` before showing anything, so
+      `:s/hel` and `:s/hello` highlighted nothing — wrong; real nvim's
+      incsearch narrows the highlight live as the pattern itself is typed,
+      before the closing delimiter even exists. Fixed by splitting
+      `exmode.ParseSubstitute`'s strict segment logic out into a new,
+      lenient `exmode.SplitSubstituteSegments` (same splitting, no minimum-
+      segment-count requirement) that `ParseSubstitute` itself now calls —
+      `SubstitutePreviewRangesLocked` uses the lenient form directly, so
+      `s/fo` already highlights every "fo" and narrows/updates live as more
+      is typed; the "g" flag only takes effect once its own segment has
+      actually been typed, matching how execution reads it. Rendering
+      differs structurally per frontend: `gui-base` draws every glyph
+      itself, so a match gets a `withSubstitutePreviewHighlight` full-cell
+      background fill layered underneath whatever the cell already draws
+      (no toolkit limitation, same non-destructive layering
+      `withDiagnosticUnderline` already established). `tui-base` had to
+      grow a real capability it didn't have before: `openTag`'s background
+      was previously always hardcoded to the editor's own bg color, so a
+      match now gets its own background slot in the tag (`#515c7e`, Tokyo
+      Night's own visual-selection shade, kept the same in both frontends)
+      while keeping its syntax-color foreground. Verified end-to-end at
+      the `Editor` level (progressive narrowing, g-flag timing,
+      current-line/`%` scope, silent on invalid/incomplete input) and at
+      the rendering level (`tui-base`'s `styledLineText` tests cover
+      highlight-over-plain-text and highlight-over-keyword-color). (M, 🤖)
+- [ ] **T30 — The `c` (confirm) flag.** Walks each match one at a time,
+      asking y/n/a/q/l before deciding — real per-match interactivity, not
+      just a highlight. Reuses T29's `findSubstituteMatchesLocked`/
+      highlight-rendering machinery for "where's the current candidate"
+      rather than a new scan. New pieces: a confirm-prompt state on
+      `Cursor` (same shape as `HoverState`/`RegisterOverview` — not a real
+      `Mode`); a new top-of-`HandleKey` interception for `y`/`n`/`a`/`q`/`l`
+      while it's active, ahead of Normal-mode dispatch (needed since `y`
+      is also a real Normal-mode verb — same precedence shape Insert/
+      Command mode's own literal-capture branches already use); a small
+      status-bar prompt in both frontends; and a running offset-delta as
+      edits land one at a time, since later matches were located against
+      the pre-edit text and need shifting once an earlier one's replacement
+      changes length. All familiar shapes, not a new rendering
+      architecture — closer to the T22-T25 register/named-register batch
+      than to T29's own highlighting work. (M, 🧠 — real interaction
+      design: where the prompt itself shows in each frontend is worth
+      scoping deliberately, not defaulted)
+
+## 7. UX polish pass — "works" vs. "feels nice" (2026-10-17)
 
 Prompted directly by the user's own lived experience hitting the gap
 ("i need to check the bottom bar for my mode, which felt odd") plus two
 more small-change/big-UX-result asks in the same message. Sequenced by the
 user as cursor shape → command completion → line numbers
-("sequence is good").
+("sequence is good") — T30 above now runs ahead of T27/T28 per the user's
+own reprioritization.
 
 - [x] **T26 — Mode-based cursor shape in `tui-base`.** Done 2026-10-17.
       `gui-base` already drew a block (Normal/Visual/Command) vs. pipe
@@ -474,68 +548,6 @@ user as cursor shape → command completion → line numbers
       frontends need to read it every render). (L, 🧠 — real design
       surface, a good one to scope together rather than hand off whole)
 
-## 7. Live `:s///` match highlighting — "inccommand" (2026-10-17)
-
-Raised directly off the back of T13-T15's `:s///`/`:%s///` work ("i want
-to highlight the code in the editor when i use :s and %s, like nvim").
-Scoped via an explicit choice between nvim's two related "highlight while
-using :s" behaviors — the live-preview-while-typing one now, the `c`
-flag's own per-match confirm-prompt highlighting later, as a deliberate
-follow-up rather than both at once.
-
-- [x] **T29 — Live preview highlighting while typing `:s`/`:%s`.** Done
-      2026-10-17. Scoped deliberately to highlighting the matches
-      themselves, not previewing the replaced text in place (nvim's full
-      `inccommand=nosplit` behavior) — that would need a non-committed,
-      purely visual overlay edit, a bigger feature left for if it's
-      actually wanted later. `executeSubstituteLocked`'s line-scanning
-      logic (current-line-only by default, every line on `%`, first match
-      per line unless `g`) was factored out into a new shared
-      `findSubstituteMatchesLocked` so execution and preview can't drift
-      apart — one `substituteMatchLoc{Start,End,Text}` scan feeds both,
-      not two copies of the same logic. New `Editor.SubstitutePreviewRanges()
-      []offset.TextRange`: parses the live `CommandBuffer` via
-      `exmode.Parse`/`ParseSubstitute` on every render, stays silent
-      (returns nil, never errors) whenever the buffer isn't even shaped
-      like a complete substitute yet — no closing delimiter, empty
-      pattern, or a pattern that doesn't compile as RE2 — since typing is
-      naturally incomplete most of the time and real nvim behaves the
-      same way. New `viewmanager.SubstitutePreviewContains`/
-      `SubstitutePreviewRangesForRange` reuse `offset.TextRange` directly
-      rather than a new span type (no metadata beyond "this is a live
-      match" to carry, unlike `StyledSpan`'s `Style` or `DiagnosticSpan`'s
-      `Style`+`Message`). Rendering differs structurally per frontend:
-      `gui-base` draws every glyph itself, so a match gets a new
-      `withSubstitutePreviewHighlight` full-cell background fill layered
-      underneath whatever the cell already draws (its own syntax color,
-      plus any diagnostic underline) — no toolkit limitation there, same
-      non-destructive layering `withDiagnosticUnderline` already
-      established. `tui-base` had to grow a real capability it didn't
-      have before: `openTag`'s background was previously always hardcoded
-      to the editor's own bg color, so a match now gets its own
-      background slot in the tag (`#515c7e`, Tokyo Night's own visual-
-      selection shade, kept the same in both frontends for consistency)
-      while keeping its syntax-color foreground — unlike the diagnostic-
-      severity-color limitation (`docs/packages/small-packages.md`'s
-      `exmode` entry), there's no real constraint here forcing a tradeoff,
-      since foreground and background are independent tag slots. Verified
-      end-to-end at the `Editor` level (parses partial/invalid input
-      silently, respects current-line/`%`/`g` scope) and at the rendering
-      level (`tui-base`'s `styledLineText` tests cover highlight-over-
-      plain-text and highlight-over-keyword-color). (M, 🤖)
-- [ ] **T30 — The `c` (confirm) flag.** Walks each match one at a time,
-      asking y/n/a/q/l before deciding — real per-match interactivity, not
-      just a highlight. Reuses T29's `findSubstituteMatchesLocked`/
-      `SubstitutePreviewRanges` machinery for "where's the current
-      candidate" rather than a new scan; the new part is the confirm-
-      prompt state machine itself (something `Cursor`-level, similar in
-      shape to `HoverState`/`RegisterOverview` — not a real `Mode`) plus
-      wiring a highlight specifically for "the one candidate currently
-      being asked about," distinct from "all matches this command would
-      touch." (M, 🧠 — real interaction design: where the y/n/a/q/l prompt
-      itself shows in each frontend is worth scoping deliberately, not
-      defaulted)
-
 ## Longer horizon — browse, don't start yet
 
 - **Visual mode** — real design work (operators act directly on a
@@ -543,6 +555,30 @@ follow-up rather than both at once.
   Normal's verb+noun grammar). Flagged previously as your carve-out to
   design/drive, not a default delegate. Its `StoreSelection` Target+Action
   (see `DESIGN_KEY_PIPELINE.md`) is now at least sketched, not designed.
+- **Live `:s///` replacement-text preview** ("inccommand=nosplit" —
+  showing the word actually turn into its replacement in the buffer as
+  you type, not just a highlight on the original). Deliberately not high
+  priority — "the highlight is already amazing" — and deliberately not
+  folded into T29: today's rendering model everywhere in this codebase
+  assumes on-screen text is literally the buffer's own bytes (styles/
+  diagnostics are colors keyed by real byte offset); this needs a second,
+  purely visual code path that splices replacement text into a line for
+  display only, then re-derives that line's column math so the cursor and
+  every other per-rune overlay still land correctly against a line that's
+  temporarily a different length than the real buffer. Real, not
+  impossible — roughly line-numbers-sized (T28) — but a genuine new
+  rendering mechanism, not a quick follow-on to T29's highlight. Mutating
+  the real buffer live and undoing it per keystroke was considered and
+  ruled out: it would spam undo history, tree-sitter re-parses, and LSP
+  `didChange` for edits that aren't real yet.
+- **Regex support for `:s///`'s dialect itself** — raised while discussing
+  the above, framed as "somewhere down the line," low priority. Needs
+  disambiguating when picked up: `:s///` already uses real regex (Go's
+  `regexp`/RE2 — see `BACKLOG.md`'s `:s///`-dialect entry and
+  `docs/packages/small-packages.md`'s `exmode` entry), so this may mean
+  closer vim-regex-dialect parity (backreferences, lookaround, `\d`/`\w`-
+  style shorthands, `\1` instead of Go's `$1`) rather than "add regex" from
+  scratch — confirm which before scoping real work here.
 - Search, macros, marks, splits/multi-buffer, folding, autocommands — see
   `VIM_ACTION_CHECKLIST.md` and `IDE_FEATURE_CHECKLIST.md` for the full
   unprioritized inventory; `FEATURES.md`'s Stage 3+ for sequencing.

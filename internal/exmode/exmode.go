@@ -110,24 +110,17 @@ type SubstituteCommand struct {
 
 // ParseSubstitute parses raw — a :s command's Raw field, i.e. everything
 // after the "s" itself, starting with the delimiter — into its segments.
-// A backslash immediately before the delimiter escapes it as a literal
-// character instead of ending a segment, so a pattern/replacement can
-// contain the delimiter itself (e.g. s#a\#b#c# search for "a#b"). ok is
-// false when raw doesn't start with a real delimiter (a letter, digit, or
-// whitespace can't be one) or doesn't contain at least one more
-// unescaped occurrence of it (no pattern/replacement boundary at all).
+// ok is false when raw doesn't start with a real delimiter (a letter,
+// digit, or whitespace can't be one) or doesn't contain at least one more
+// unescaped occurrence of it (no pattern/replacement boundary at all) —
+// i.e. this requires a *complete* command, exactly as a real execution
+// needs. A caller that wants to react to an in-progress command as it's
+// still being typed (live match highlighting while only a pattern has
+// been typed so far, say) wants SplitSubstituteSegments directly instead,
+// which this is now built on top of.
 func ParseSubstitute(raw string) (SubstituteCommand, bool) {
-	runes := []rune(raw)
-	if len(runes) == 0 {
-		return SubstituteCommand{}, false
-	}
-	delim := runes[0]
-	if unicode.IsLetter(delim) || unicode.IsDigit(delim) || unicode.IsSpace(delim) || delim == '\\' {
-		return SubstituteCommand{}, false
-	}
-
-	segments := splitOnUnescaped(string(runes[1:]), delim)
-	if len(segments) < 2 {
+	segments, _, ok := SplitSubstituteSegments(raw)
+	if !ok || len(segments) < 2 {
 		return SubstituteCommand{}, false
 	}
 	sc := SubstituteCommand{Pattern: segments[0], Replacement: segments[1]}
@@ -135,6 +128,30 @@ func ParseSubstitute(raw string) (SubstituteCommand, bool) {
 		sc.Flags = segments[2]
 	}
 	return sc, true
+}
+
+// SplitSubstituteSegments splits raw — a :s command's Raw field, starting
+// with the delimiter — into whatever segments have been typed so far,
+// without requiring the command to be complete the way ParseSubstitute
+// does. A backslash immediately before the delimiter escapes it as a
+// literal character instead of ending a segment, so a pattern/replacement
+// can contain the delimiter itself (e.g. s#a\#b#c# searches for "a#b").
+// ok is false only when raw doesn't even start with a real delimiter (a
+// letter, digit, or whitespace can't be one); otherwise segments always
+// has at least one entry (an empty string when nothing follows the
+// delimiter yet, e.g. raw == "/"), for a caller like live preview
+// highlighting to treat "just the pattern, still being typed" as a real,
+// meaningful state rather than an error.
+func SplitSubstituteSegments(raw string) (segments []string, delim rune, ok bool) {
+	runes := []rune(raw)
+	if len(runes) == 0 {
+		return nil, 0, false
+	}
+	delim = runes[0]
+	if unicode.IsLetter(delim) || unicode.IsDigit(delim) || unicode.IsSpace(delim) || delim == '\\' {
+		return nil, 0, false
+	}
+	return splitOnUnescaped(string(runes[1:]), delim), delim, true
 }
 
 // splitOnUnescaped splits s on delim, treating "\<delim>" as a literal
