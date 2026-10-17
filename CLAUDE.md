@@ -765,6 +765,29 @@ resolver tests — see `internal/editor/dispatch_test.go`'s
 `TestShortDelete*`/`TestX`/`TestNamedRegister*`/`TestRegisterOverview`.
 Both tagged `gui-local`/`tui-local` builds verified clean.
 
+**A real, latent data race fixed and verified under `-race`, 2026-10-17**
+(`ATOMIC_TASKS.md`'s T16) — `piecetable.GetRuneAt`/`FindPieceAt` used to
+read `Pieces`/`Master`/`Add` with no lock at all while `Insert`/`Delete`
+mutate them under `s.mu.Lock()`. Fixed with a new unexported, lock-free
+`pieceAt`; both exported methods now self-lock and call it directly. This
+surfaced the same reentrant-mutex bug class already caught twice before in
+this project (`:Format`/`StartFormat`, the key-handling pipeline): `Insert`
+already held the write lock and called `s.FindPieceAt(offset)` — once
+`FindPieceAt` itself started taking `s.mu.RLock()`, that call would have
+deadlocked on first use (a write lock already held by the same goroutine
+blocks its own later `RLock`, and `sync.RWMutex` doesn't support recursive
+`RLock` either way). Fixed by having `Insert` call `pieceAt` directly too,
+caught by tracing the call graph before shipping, not by hitting the hang.
+Verified as a *real* race, not just by inspection: new
+`TestConcurrentInsertAndGetRuneAt` was confirmed to actually fail with a
+real `WARNING: DATA RACE` against the reverted pre-fix code under
+`go test -race`, then confirmed clean against the fix — both the targeted
+package and the whole module (`go test -race ./...`) pass clean. The
+package-wide locking invariant is now stated once in `piecetable/table.go`'s
+doc comment rather than per-function, per the naming/locking convention
+this same task originally proposed (see this file's Documentation
+conventions section).
+
 ## Module & toolchain
 
 - Module: `github.com/fliplucky/pieces-store`
@@ -1222,12 +1245,13 @@ Known gaps as of now:
    tracking — that widget doesn't expose visible-row count cheaply before
    its first real draw) — still a real improvement over no auto-follow at
    all, which is what existed before.
-3. **Cross-cutting backend concerns, still open**: `piecetable.GetRuneAt`/
-   `FindPieceAt` bypass their own mutex on the actual read path (a real, if
-   currently latent, data race); `Insert` with a negative offset silently
-   misplaces instead of erroring (`GetRange` itself was fixed — it now
-   clamps out-of-range/reversed input instead of panicking, see
-   `piecetable/reader.go`/`table_test.go`'s `TestGetRange`). See
+3. **Cross-cutting backend concerns, still open**: `Insert` with a
+   negative offset silently misplaces instead of erroring (`GetRange`
+   itself was fixed — it now clamps out-of-range/reversed input instead
+   of panicking, see `piecetable/reader.go`/`table_test.go`'s
+   `TestGetRange`). `piecetable.GetRuneAt`/`FindPieceAt` bypassing their
+   own mutex (the other item that used to be listed here) is fixed — see
+   `docs/packages/piecetable.md`'s Locking invariant section. See
    `BACKLOG.md` for the full sidebar list (most of these are deliberately
    deferred, not overlooked).
 4. **`ScanUntil`** (`internal/offset/motions.go`) is still dead code — same

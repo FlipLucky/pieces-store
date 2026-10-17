@@ -2,6 +2,16 @@
 // To mutate, use insert and delete
 // Use CombinePieces to get the full text, while get range is to get a slice for a vieuwport
 // FindPieceAt is to locate which piece contains the offset, while GetRuneAt is to retrieve a specific character from the table.
+//
+// Locking invariant: every exported Table method is self-locking (it takes
+// s.mu itself before touching Master/Add/Pieces). No unexported helper
+// (pieceAt, coalesceUnlocked, ...) ever locks, and none should ever be
+// called from outside this package, or from inside it except from
+// somewhere that already holds s.mu — sync.RWMutex doesn't support
+// recursive RLock, so an exported method must never call another
+// exported, self-locking method on the same Table from within its own
+// locked body (see Insert/pieceAt, GetRuneAt). No external package should
+// ever need to know or care that locking happens at all.
 package piecetable
 
 import (

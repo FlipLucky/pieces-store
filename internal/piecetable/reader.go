@@ -2,7 +2,10 @@ package piecetable
 
 import "unicode/utf8"
 
-func (s *Table) FindPieceAt(offset int) (int, int) {
+// pieceAt is the lock-free lookup every exported reader built on it shares
+// — see table.go's package doc comment for the locking invariant this
+// relies on: never call it except from somewhere that already holds s.mu.
+func (s *Table) pieceAt(offset int) (int, int) {
 	currentOffset := 0
 	for i, p := range s.Pieces {
 		if offset >= currentOffset && offset < currentOffset+p.Length {
@@ -14,11 +17,30 @@ func (s *Table) FindPieceAt(offset int) (int, int) {
 	return len(s.Pieces), 0
 }
 
+// FindPieceAt locates which piece contains offset, returning its index and
+// the offset within that piece.
+func (s *Table) FindPieceAt(offset int) (int, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pieceAt(offset)
+}
+
+// GetRuneAt retrieves a specific character from the table. Calls pieceAt
+// directly rather than FindPieceAt — sync.RWMutex doesn't support
+// recursive RLock, so this must not call back into another self-locking
+// method while already holding the lock here.
 func (s *Table) GetRuneAt(offset int) (rune, int) {
-	if offset < 0 || offset >= s.Len() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	total := 0
+	for _, p := range s.Pieces {
+		total += p.Length
+	}
+	if offset < 0 || offset >= total {
 		return utf8.RuneError, 0
 	}
-	pieceIdx, offsetInPiece := s.FindPieceAt(offset)
+	pieceIdx, offsetInPiece := s.pieceAt(offset)
 	if pieceIdx >= len(s.Pieces) {
 		return utf8.RuneError, 0
 	}

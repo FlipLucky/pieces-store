@@ -19,8 +19,10 @@ func (s *Table) Insert(offset int, data []byte) {
 	addStart := len(s.Add)
 	s.Add = append(s.Add, data...)
 
-	// 3. Find the split point
-	pieceIdx, offsetInPiece := s.FindPieceAt(offset)
+	// 3. Find the split point. Calls pieceAt directly, not FindPieceAt —
+	// this method already holds s.mu.Lock(), and sync.RWMutex doesn't
+	// support recursive RLock from the same goroutine.
+	pieceIdx, offsetInPiece := s.pieceAt(offset)
 
 	// 4. Create the middle piece
 	middle := Piece{BufferType: Add, Start: addStart, Length: len(data)}

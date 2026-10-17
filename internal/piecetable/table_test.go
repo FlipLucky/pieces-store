@@ -1,6 +1,7 @@
 package piecetable
 
 import (
+	"sync"
 	"testing"
 )
 
@@ -204,4 +205,31 @@ func TestCoalesce(t *testing.T) {
 	if got := table.CombinePieces(); got != "Hello World!!!" {
 		t.Errorf("Text mismatch after coalesce. Got %q", got)
 	}
+}
+
+// TestConcurrentInsertAndGetRuneAt covers T16: GetRuneAt/FindPieceAt used
+// to bypass s.mu entirely on their read path while Insert/Delete mutate
+// s.Pieces/s.Add under s.mu.Lock() — a real, latent data race, caught here
+// by actually running both concurrently under -race rather than trusting
+// the fix by inspection. Appends at the end (never touching the offsets
+// GetRuneAt reads) so this test only exercises the race itself, not an
+// unrelated semantic question about reading through a concurrent edit.
+func TestConcurrentInsertAndGetRuneAt(t *testing.T) {
+	table := NewPieceTable([]byte("Hello World"))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			table.Insert(table.Len(), []byte("!"))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			table.GetRuneAt(0)
+		}
+	}()
+	wg.Wait()
 }

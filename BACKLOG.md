@@ -139,11 +139,14 @@ list, not a gap.
 
 ## Correctness/robustness (latent — not currently triggered, but real)
 
-- **`piecetable.GetRuneAt`/`FindPieceAt` bypass their own mutex** on the
-  actual read path — a genuine data race if ever called concurrently from
-  outside `Editor`'s coarser lock. Not triggered today (single-goroutine
-  usage per `Editor`), but a broken promise on a type that advertises
-  thread safety via `sync.RWMutex`.
+- ~~**`piecetable.GetRuneAt`/`FindPieceAt` bypass their own mutex**~~
+  **Fixed 2026-10-17** (`ATOMIC_TASKS.md`'s T16) — both are now
+  self-locking, backed by a new unexported lock-free `pieceAt`; `Insert`
+  (which already held the write lock) now calls `pieceAt` directly rather
+  than the newly-locking `FindPieceAt`, avoiding a reentrant-lock deadlock
+  that would otherwise have shipped on first use. Verified as a real race,
+  not just by inspection — `TestConcurrentInsertAndGetRuneAt` fails under
+  `go test -race` against the old code and passes against the fix.
 - **`Insert` with a negative offset silently misplaces instead of
   erroring** — no consistent failure discipline across
   `Insert`/`Delete`/`FindPieceAt`. (`GetRange` itself was fixed — it now

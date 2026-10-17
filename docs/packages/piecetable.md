@@ -25,11 +25,26 @@ cost on a large file.
 mutex-protected rewrite of the older, now-deleted `internal/piecestore`
 package (`Store` → `Table`).
 
+## Locking invariant
+
+Every exported `Table` method is self-locking; no unexported helper
+(`pieceAt`, `coalesceUnlocked`, ...) ever locks, and none should be called
+except from somewhere that already holds `s.mu` — stated once in
+`table.go`'s package doc comment rather than per-function, since no
+external package needs to know or care that locking happens at all. The
+one real subtlety: `sync.RWMutex` doesn't support recursive `RLock`, so an
+exported, self-locking method must never call *another* exported,
+self-locking method on the same `*Table` from inside its own locked body
+— `GetRuneAt` calls `pieceAt` directly rather than `FindPieceAt`, and
+`Insert` (already holding the write lock) does the same, for exactly this
+reason. Fixed 2026-10-17 (`ATOMIC_TASKS.md`'s T16) — see
+`internal/piecetable/table_test.go`'s `TestConcurrentInsertAndGetRuneAt`,
+which fails under `go test -race` against the pre-fix code and passes
+against the fix (confirmed by actually reverting and re-running, not
+assumed).
+
 ## Known, deliberately-deferred gaps
 
-- `GetRuneAt`/`FindPieceAt` bypass their own mutex on the actual read path
-  — a real, currently-latent data race (not triggered by single-goroutine
-  usage per `Editor` today).
 - `FindPieceAt`'s O(P) linear scan is deliberately deferred — once
   viewport slicing exists it scales with piece count from editing
   activity, not file size.

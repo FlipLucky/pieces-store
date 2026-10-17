@@ -211,27 +211,37 @@ nothing here needs the redesign to land first.
 
 ## 5. Small, self-contained bug fixes (good solo confidence-builders)
 
-- [ ] **T16** — Fix `piecetable.GetRuneAt`/`FindPieceAt` bypassing their
-      own mutex — a real, self-contained concurrency bug, good for
-      sharpening Go skills without touching unfamiliar territory. (M, 🧠)
-      Scoped 2026-10-11, not yet built — see
-      `docs/packages/piecetable.md`'s "Known, deliberately-deferred gaps"
-      for the exact lines and the fix shape, written up for you to drive.
-      Naming note: the new unexported helper should be a plain,
-      behavior-named identifier (e.g. `pieceAt`), *not* `findPieceAtLocked`.
-      Where the locking explanation goes, refined 2026-10-11: not a
-      precondition comment on the individual helper either — `Insert`
-      (write lock) and `GetRuneAt` (read lock) both call the same
-      lock-free lookup already locked, so there's no real per-site
-      ambiguity to flag at that level. The actual invariant worth stating
-      ("every exported `Table` method is self-locking; no unexported
-      helper ever locks, and none should be called except from somewhere
-      that already holds `s.mu`") is package-wide architecture, not one
-      function's business — write it into `table.go`'s existing package
-      doc comment, once, and let individual helpers stay undocumented on
-      this point entirely. No external package (`executor`, `editor`, ...)
-      should ever need to know or care that locking happens at all —
-      that's `piecetable`'s own encapsulated concern end to end.
+- [x] **T16** — Fixed 2026-10-17: `piecetable.GetRuneAt`/`FindPieceAt`
+      bypassing their own mutex. New unexported `pieceAt(offset) (int,
+      int)` is the lock-free lookup (the plain, behavior-named identifier
+      the earlier scoping note called for — not `findPieceAtLocked`);
+      `FindPieceAt` is now a thin, self-locking (`RLock`) wrapper around
+      it; `GetRuneAt` also self-locks and calls `pieceAt` directly (never
+      the newly-locking `FindPieceAt`) and inlines its own length check
+      rather than calling the equally self-locking `Len()` — `sync.
+      RWMutex` doesn't support recursive `RLock`, so an exported,
+      self-locking method must never call another one on the same
+      `*Table` from inside its own locked body. **`Insert` needed the
+      exact same fix in the other direction**: it already held `s.mu.
+      Lock()` and called `s.FindPieceAt(offset)` — once `FindPieceAt`
+      itself started taking `s.mu.RLock()`, that call would have
+      deadlocked on first use (a write lock already held by the same
+      goroutine blocks its own later `RLock`) — caught by tracing the
+      actual call graph before shipping, the same discipline already
+      documented for `:Format`/`StartFormat` and the key-handling
+      pipeline. Fixed by having `Insert` call `pieceAt` directly too. The
+      package-wide invariant ("every exported method is self-locking; no
+      unexported helper ever locks, and none should be called except
+      already-locked") is now stated once in `table.go`'s package doc
+      comment, not repeated per-function, per the naming/locking
+      convention this task itself originally proposed. **Verified as a
+      real, not just theoretical, race**: new
+      `TestConcurrentInsertAndGetRuneAt` runs `Insert`/`GetRuneAt`
+      concurrently under `go test -race` — confirmed it actually fails
+      with a real `WARNING: DATA RACE` against the pre-fix code (reverted
+      temporarily to check, not just assumed), and passes clean against
+      the fix. Whole module also verified clean under `go test -race
+      ./...`, not just this one package.
 - [x] **T17** — Counted delete/change/yank (`3diw`, `2dd`, ...). Done
       2026-10-11: `resolveRange` (`internal/interpreter/normal.go`) now
       takes `count` and chains `resolveRangeOnce` that many times, each
