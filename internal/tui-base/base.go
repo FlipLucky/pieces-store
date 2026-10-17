@@ -124,65 +124,49 @@ func openTag(color string, underline bool) string {
 	return fmt.Sprintf("[%s:%s:%s]", color, tokyoBgHex, attr)
 }
 
-// cursorTag is openTag's equivalent for the cursor's own cell — inverted
-// colors (dark text on the bright cursor block) instead of a syntax color.
-func cursorTag(underline bool) string {
-	attr := "U"
-	if underline {
-		attr = "u"
-	}
-	return fmt.Sprintf("[%s:#7aa2f7:%s]", tokyoBgHex, attr)
-}
-
 // styledLineText renders one line as a tview color/underline-tagged
-// string: the cursor cell (if this is the cursor's line) takes priority
-// over any styled span at the same position; a syntax span colors the
-// rune; a diagnostic span underlines it — independently, so a diagnosed
-// keyword keeps its keyword color and gains an underline rather than
-// losing its color to solid red/yellow. Identical output to before either
-// existed when spans and diagnostics are both empty.
-func styledLineText(line string, lineStart int, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, isCursorLine bool, cursorCol int) string {
+// string: a syntax span colors the rune; a diagnostic span underlines it —
+// independently, so a diagnosed keyword keeps its keyword color and gains
+// an underline rather than losing its color to solid red/yellow. Identical
+// output to before diagnostics existed when spans and diagnostics are both
+// empty.
+//
+// The cursor's own cell used to be drawn here too, as an inverted-color
+// character simulating a block cursor. That's gone (2026-10-17) in favor
+// of the terminal's own real cursor (see Boot's SetAfterDrawFunc), which
+// can actually change shape between Normal/Visual/Command's block and
+// Insert's bar — tview's tag-based inversion had no way to express "bar"
+// at all, only ever a solid block regardless of mode.
+func styledLineText(line string, lineStart int, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan) string {
 	runes := []rune(line)
 	var b strings.Builder
 	byteOffset := 0
-	for i, r := range runes {
+	for _, r := range runes {
 		abs := lineStart + byteOffset
 		diagColor, underline := diagnosticColor(viewmanager.DiagnosticStyleAt(diagnostics, abs))
 
-		switch {
-		case isCursorLine && i == cursorCol:
-			b.WriteString(cursorTag(underline))
+		color, hasColor := tviewStyleColor(viewmanager.StyleAt(spans, abs))
+		if underline {
+			// tview's tag API ties underline to the same foreground
+			// color as the text (confirmed against its real parser —
+			// see tviewStyleColor's doc comment): there's no way to
+			// underline in red while keeping a token's own syntax
+			// color. Given that real constraint, using the
+			// diagnostic's own severity color here — same as most
+			// terminal-based tools' diagnostic output — is the
+			// closer-to-standard choice, not a fallback: it's how a
+			// user actually expects an error to look in a terminal.
+			color = diagColor
+			hasColor = true
+		}
+		if hasColor || underline {
+			b.WriteString(openTag(color, underline))
 			b.WriteRune(r)
 			b.WriteString(resetTag)
-		default:
-			color, hasColor := tviewStyleColor(viewmanager.StyleAt(spans, abs))
-			if underline {
-				// tview's tag API ties underline to the same foreground
-				// color as the text (confirmed against its real parser —
-				// see tviewStyleColor's doc comment): there's no way to
-				// underline in red while keeping a token's own syntax
-				// color. Given that real constraint, using the
-				// diagnostic's own severity color here — same as most
-				// terminal-based tools' diagnostic output — is the
-				// closer-to-standard choice, not a fallback: it's how a
-				// user actually expects an error to look in a terminal.
-				color = diagColor
-				hasColor = true
-			}
-			if hasColor || underline {
-				b.WriteString(openTag(color, underline))
-				b.WriteRune(r)
-				b.WriteString(resetTag)
-			} else {
-				b.WriteRune(r)
-			}
+		} else {
+			b.WriteRune(r)
 		}
 		byteOffset += len(string(r))
-	}
-	if isCursorLine && cursorCol >= len(runes) {
-		b.WriteString(cursorTag(false))
-		b.WriteString(" ")
-		b.WriteString(resetTag)
 	}
 	return b.String()
 }
@@ -270,6 +254,14 @@ func Boot(ed *editor.Editor) error {
 	// existed here before.
 	const cursorTopPadding = 10
 
+	// cursorScreenRow/Col and cursorMode are read by the SetAfterDrawFunc
+	// hook below to position and shape the terminal's own real cursor —
+	// both tview's draw cycle and renderContent always run on the same
+	// single-threaded event loop (direct calls, or via
+	// app.QueueUpdateDraw), so these plain variables need no locking.
+	var cursorScreenRow, cursorScreenCol int
+	var cursorMode types.Mode
+
 	// Function to rebuild rendering text with cursor block highlight
 	renderContent := func() {
 		cursor := ed.GetCursor()
@@ -286,18 +278,16 @@ func Boot(ed *editor.Editor) error {
 
 		var formattedLines []string
 		for i, line := range slice.Lines {
-			absRow := slice.StartRow + i
 			lineStart := slice.LineOffsets[i]
-			isCursorLine := absRow == cursor.Row
 			lineSpans := viewmanager.SpansForRange(spans, lineStart, lineStart+len(line))
 			lineDiagnostics := viewmanager.DiagnosticSpansForRange(diagnosticSpans, lineStart, lineStart+len(line))
 
 			var rendered string
 			switch {
-			case !isCursorLine && len(lineSpans) == 0 && len(lineDiagnostics) == 0:
+			case len(lineSpans) == 0 && len(lineDiagnostics) == 0:
 				rendered = line
 			default:
-				rendered = styledLineText(line, lineStart, lineSpans, lineDiagnostics, isCursorLine, cursor.Col)
+				rendered = styledLineText(line, lineStart, lineSpans, lineDiagnostics)
 			}
 			if msg, ok := viewmanager.DiagnosticMessageForRange(lineDiagnostics, lineStart, lineStart+len(line)); ok {
 				rendered += virtualDiagnosticText(msg)
@@ -313,6 +303,10 @@ func Boot(ed *editor.Editor) error {
 			scrollRow = 0
 		}
 		editorView.ScrollTo(scrollRow, 0)
+
+		cursorScreenRow = cursorRow - scrollRow
+		cursorScreenCol = cursor.Col
+		cursorMode = cursor.Mode
 
 		renderHoverPopup(pages, hoverPopup, editorView, cursor, cursorRow, scrollRow)
 
@@ -437,6 +431,25 @@ func Boot(ed *editor.Editor) error {
 		}
 
 		return event
+	})
+
+	// Drive the terminal's own real cursor instead of simulating one with
+	// inverted-color text (see styledLineText's doc comment for why): a
+	// solid block in Normal/Visual/Command, a thin bar in Insert — real
+	// native terminal cursor-shape support (DECSCUSR escape sequences
+	// under the hood), confirmed present in the installed tcell version,
+	// not an approximation tview's tag-string rendering could ever
+	// express (it has no notion of "bar" at all). Runs after every draw,
+	// same goroutine as renderContent, so cursorScreenRow/Col/cursorMode
+	// are always current.
+	app.SetAfterDrawFunc(func(screen tcell.Screen) {
+		innerX, innerY, _, _ := editorView.GetInnerRect()
+		style := tcell.CursorStyleSteadyBlock
+		if cursorMode == types.ModeInsert {
+			style = tcell.CursorStyleSteadyBar
+		}
+		screen.SetCursorStyle(style)
+		screen.ShowCursor(innerX+cursorScreenCol, innerY+cursorScreenRow)
 	})
 
 	return app.SetRoot(pages, true).Run()

@@ -18,7 +18,7 @@ func main() {
 			log.Fatalf("failed to open file %s: %v", os.Args[1], err)
 		}
 	} else {
-		ed = editor.NewEditor("Hello World")
+		ed = editor.NewEditor("")
 	}
 
 	app := guibase.CreateApp(ed)

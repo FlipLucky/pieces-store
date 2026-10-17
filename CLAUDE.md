@@ -841,6 +841,37 @@ just unit-level parser tests — see
 `internal/editor/substitute_test.go`'s full matrix. Both tagged
 `gui-local`/`tui-local` builds verified clean.
 
+**UX polish pass, 2026-10-17** — prompted directly by the user's own lived
+experience hitting a real gap ("i need to check the bottom bar for my
+mode, which felt odd"), sequenced by the user as cursor shape → command
+completion → line numbers ("its one of those things between: this works
+and: this feels nice"). First item done, the other two queued
+(`ATOMIC_TASKS.md`'s T26–T28):
+
+- **T26 — `tui-base` gained a real mode-based cursor shape.** It never
+  had one before this (confirmed by a verification fork rather than
+  trusting this file's own prose, which read as if both frontends already
+  had it — see the `internal/gui-base`/`internal/tui-base` Architecture
+  entry above for the corrected wording): tview's tag-string rendering
+  has no concept of cursor shape at all, so `tui-base` simulated a cursor
+  by inverting one character's colors, the same solid block in every
+  mode. Rather than extend that simulation with a bar-shaped
+  approximation, switched to tcell's real native cursor API
+  (`Screen.SetCursorStyle`/`ShowCursor`, confirmed actually wired to the
+  terminal backend in the installed tcell v2.8.1, not just declared on an
+  interface), driven from a new `tview.Application.SetAfterDrawFunc` hook
+  in `Boot` — genuinely changes shape between a block
+  (Normal/Visual/Command) and a bar (Insert), which text-simulation could
+  never express. `cursorTag` and the cursor-cell-drawing branches in
+  `styledLineText` are deleted outright (no dual-path): the function
+  shrank from 6 params to 4, since cursor positioning moved to a
+  `Boot`-level concern.
+- Also, separately: both `cmd/gui`/`cmd/tui` stopped defaulting to a
+  `"Hello World"` buffer when launched with no file argument — a leftover
+  from the project's earliest prototype phase, noticed and flagged by the
+  user directly ("the editor still starts with hello world"). Both now
+  start with an empty buffer, like real vim/nvim.
+
 ## Module & toolchain
 
 - Module: `github.com/fliplucky/pieces-store`
@@ -1062,7 +1093,16 @@ can end up in a dependency cycle with `editor` or with each other.
   `tui-base` gets natively from tcell; multi-rune `key.EditEvent` text —
   paste/IME — goes through `ed.InsertLiteralText` instead). `gui-base`
   renders via `Editor.Viewport` (windowed, scroll-follows-cursor) with a
-  block/pipe cursor per mode; `tui-base` now also fetches via
+  hand-drawn block/pipe cursor per mode (it draws every glyph itself, so
+  this is just another glyph). `tui-base` draws text via tview's tag
+  string API, which has no notion of cursor "shape" at all — until
+  2026-10-17 it only ever simulated a cursor by inverting one character's
+  colors, the same solid block in every mode; it now drives the
+  terminal's own real cursor instead (`tcell.Screen.SetCursorStyle` +
+  `ShowCursor`, from a `tview.Application.SetAfterDrawFunc` hook — see
+  `ATOMIC_TASKS.md`'s T26), genuinely changing shape between a block
+  (Normal/Visual/Command) and a bar (Insert), which the old text-
+  simulation approach could never express. `tui-base` also fetches via
   `Editor.Viewport` (a window around the cursor, `tview.TextView.ScrollTo`
   keeping it a fixed distance from the top — settled 2026-09-19, see
   Known issues item 2) instead of full-buffer `GetText()` +

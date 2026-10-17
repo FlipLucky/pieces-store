@@ -418,6 +418,62 @@ all ranges as originally planned — the rest of the original staging
       `renderRegisterOverlay` (gui-base) / `registerView` (tui-base). See
       `TestRegisterOverview`.
 
+## 6. UX polish pass — "works" vs. "feels nice" (2026-10-17)
+
+Prompted directly by the user's own lived experience hitting the gap
+("i need to check the bottom bar for my mode, which felt odd") plus two
+more small-change/big-UX-result asks in the same message. Sequenced by the
+user as cursor shape → command completion → line numbers
+("sequence is good").
+
+- [x] **T26 — Mode-based cursor shape in `tui-base`.** Done 2026-10-17.
+      `gui-base` already drew a block (Normal/Visual/Command) vs. pipe
+      (Insert) cursor by hand-drawing the glyph itself (confirmed via a
+      verification fork before starting — CLAUDE.md's prose had drifted,
+      claiming both frontends had this); `tui-base` only ever drew a
+      solid inverted-color block, in every mode, by stamping a
+      `cursorTag`-wrapped rune into `styledLineText`'s output — no `mode`
+      parameter existed anywhere in that function. Rather than extend
+      that simulation with some bar-shaped approximation, switched to
+      tcell's real native cursor: `tcell.Screen.SetCursorStyle(CursorStyle,
+      ...Color)` (confirmed present and actually wired to the terminal
+      backend in the installed `tcell v2.8.1`, not just declared on an
+      interface — `tScreen.SetCursor` has a real implementation).
+      `tview.Application.SetBeforeDrawFunc`/`SetAfterDrawFunc` hand the
+      live `tcell.Screen` straight to a callback, so `Boot` registers an
+      `AfterDrawFunc` that calls `screen.ShowCursor(x, y)` +
+      `screen.SetCursorStyle(...)` every frame, using the same
+      `editorView.GetInnerRect()` + cursor-row/col math already proven
+      correct by `renderHoverPopup`'s exact-cell positioning. `cursorTag`
+      and the cursor-cell branches in `styledLineText` are deleted
+      outright (no dual-path): the function's signature shrank from 6
+      params to 4 (`isCursorLine`/`cursorCol` no longer needed once the
+      cursor isn't drawn as text), and `style_test.go`'s cursor-specific
+      cases were removed rather than ported, since there's nothing left
+      in this function for them to test — cursor positioning is now a
+      `Boot`-level concern, not a `styledLineText` one. Verified:
+      `go build`/`vet`/`gofmt`/`test ./...` clean, plus both tagged
+      `gui-local`/`tui-local` builds. (M, 🤖)
+- [ ] **T27 — Command-name autocomplete in Command mode.** `:Lsp<Tab>` →
+      cycles `LspInstall`/`LspUninstall`/`LspStatus`/etc., the same way
+      `:e`/`:w` already autocomplete paths. Reuses the existing
+      `CompletionState`/popup UI mechanism end to end (both frontends
+      already render it) — the new part is a static command-name
+      candidate source, triggered from `completionCandidates` when its
+      current `idx := strings.LastIndexByte(buffer, ' '); if idx < 0`
+      guard would otherwise come back empty (i.e. the user is still
+      typing the command name itself, before any argument). (M, ❓)
+- [ ] **T28 — Line numbers, with a relative/absolute toggle.** New gutter-
+      rendering logic in both `gui-base` and `tui-base` independently (no
+      shared rendering code between the two frontends today, so this is
+      real duplicated work, not a one-package change) plus a toggle
+      mechanism — likely a `:set relativenumber`/`:set number`-style
+      command through the existing `exmode`/`executeCommandLocked` path.
+      Open design question not yet resolved: where the toggle's own state
+      lives (a new `Editor`/`Cursor` field most likely, since both
+      frontends need to read it every render). (L, 🧠 — real design
+      surface, a good one to scope together rather than hand off whole)
+
 ## Longer horizon — browse, don't start yet
 
 - **Visual mode** — real design work (operators act directly on a

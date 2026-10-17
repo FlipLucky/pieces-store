@@ -33,6 +33,21 @@ nothing is delivered "by default."
 
 ## tview-specific notes (tui-base)
 
+The cursor itself is drawn differently from `gui-base`: `gui-base` draws
+every glyph by hand, so its block/pipe cursor is just another glyph.
+`tui-base` renders text through tview's tag-string API, which has no
+notion of cursor shape at all — through 2026-10-16 it simulated a cursor
+by inverting one character's colors in `styledLineText`, the same solid
+block regardless of mode. As of 2026-10-17 it drives the terminal's own
+real cursor instead: `tcell.Screen.SetCursorStyle`/`ShowCursor`
+(confirmed wired to the real terminal backend in tcell v2.8.1, not just
+declared on an interface), called every frame from a
+`tview.Application.SetAfterDrawFunc` hook, using the exact same
+`editorView.GetInnerRect()` + cursor-row/col math `renderHoverPopup`
+already used for pixel-exact popup placement. Genuinely changes shape
+between a block (Normal/Visual/Command) and a bar (Insert) — something
+the old text-simulation approach structurally couldn't express.
+
 Diagnostic underlines can't be colored independently of the text's own
 color through tview's tag-string convenience layer (`tcell.Style.Underline`
 itself *does* support a color parameter, just not reachable through tags)
