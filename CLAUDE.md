@@ -955,6 +955,24 @@ and: this feels nice"). First item done, the other two queued
   `internal/viewmanager/gutter_test.go` and `internal/editor/
   settings_test.go`; `go build`/`vet`/`gofmt`/`test ./...` all clean, plus
   both tagged `gui-local`/`tui-local` builds.
+- **T27 — command-name autocomplete in Command mode — shipped the same
+  day**, the third and final item from the user's "first, add gc, line
+  number, and autocomplete" sequencing. `:Lsp<Tab>` now cycles
+  `LspInstall`/`LspStatus`/`LspUninstall`; `<C-n>`/`<C-p>` browse the same
+  list without descending — reusing the existing `CompletionState`/popup
+  mechanism end to end, zero frontend changes needed (both already render
+  it for `:e`/`:w` path completion). The only new code was a static
+  command-name candidate source: `complete.go`'s `completionCandidates`
+  used to return no candidates at all whenever the buffer had no space yet
+  (still typing the command name itself) — that branch now matches a
+  hand-maintained `commandNames` list by case-sensitive prefix (empty
+  buffer matches every command, same as real vim's bare `:<Tab>`). A real,
+  deliberate behavior change this surfaced: a bare `:q<Tab>` used to be a
+  no-op and now completes toward `quit` — the test asserting the old
+  no-op behavior was replaced outright with tests covering the new
+  command-name-completion behavior, not left stale alongside it. Verified
+  via `internal/editor/complete_test.go`; `go build`/`vet`/`gofmt`/
+  `test ./...` all clean, plus both tagged `gui-local`/`tui-local` builds.
 
 ## Module & toolchain
 

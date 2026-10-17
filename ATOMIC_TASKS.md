@@ -514,8 +514,8 @@ Prompted directly by the user's own lived experience hitting the gap
 ("i need to check the bottom bar for my mode, which felt odd") plus two
 more small-change/big-UX-result asks in the same message. Final confirmed
 sequence (2026-10-17, after T30 was bumped ahead and T31 was added): T26
-(done) → T30 (section 6, above) → T28 (done, below) → **T27 → T31** (this
-section, in this order).
+(done) → T30 (section 6, above) → T28 (done, below) → T27 (done, below) →
+**T31** (this section, next).
 
 - [x] **T26 — Mode-based cursor shape in `tui-base`.** Done 2026-10-17.
       `gui-base` already drew a block (Normal/Visual/Command) vs. pipe
@@ -597,22 +597,40 @@ section, in this order).
       the independent-combination "hybrid" case, and unknown-option/no-
       argument errors); `go build`/`vet`/`gofmt`/`test ./...` all clean,
       plus both tagged `gui-local`/`tui-local` builds. (L, 🧠)
-- [ ] **T27 — Command-name autocomplete in Command mode.** `:Lsp<Tab>` →
-      cycles `LspInstall`/`LspUninstall`/`LspStatus`/etc., the same way
-      `:e`/`:w` already autocomplete paths. Reuses the existing
-      `CompletionState`/popup UI mechanism end to end (both frontends
-      already render it) — the new part is a static command-name
-      candidate source, triggered from `completionCandidates` when its
-      current `idx := strings.LastIndexByte(buffer, ' '); if idx < 0`
-      guard would otherwise come back empty (i.e. the user is still
-      typing the command name itself, before any argument). Widened
-      2026-10-17: also wire arrow-up/down and `<C-p>`/`<C-n>` to browse
-      *command history* while in Command mode with an empty/unmodified
-      buffer (real vim's own `:`-history recall) — **but there's no
-      command-history mechanism anywhere in this codebase today**
-      (confirmed via grep, not assumed), so that half is split out into
-      **T32** below and deferred rather than silently expanding this
-      task's scope. (M, ❓)
+- [x] **T27 — Command-name autocomplete in Command mode.** Done
+      2026-10-17. `:Lsp<Tab>` cycles `LspInstall`/`LspStatus`/
+      `LspUninstall`; `<C-n>`/`<C-p>` browse the same list without
+      descending — reuses the existing `CompletionState`/popup UI
+      mechanism end to end, zero frontend changes (both already render
+      it). The only new part was a static command-name candidate source:
+      `complete.go`'s `completionCandidates` previously returned `("",
+      nil)` whenever `strings.LastIndexByte(buffer, ' ') < 0` (still
+      typing the command name itself, no argument started yet) — that
+      branch now calls a new `commandNameCandidates(prefix)` against a
+      hand-maintained `commandNames` list (one literal per
+      `executeCommandLocked` case, its longest/clearest spelling — kept in
+      sync by hand, not derived via reflection, same reasoning `exmode`
+      already assumes of its own callers). Case-sensitive prefix match,
+      same as the command names themselves (`LspInstall` vs. `install`);
+      an empty buffer matches every command, matching real vim's own bare
+      `:<Tab>` behavior. `TriggerCompletion`'s existing directory-descend
+      check (`strings.HasSuffix(selected, "/")`) needed no changes — a
+      command name never ends in `/`, so confirming one correctly just
+      ends the cycle. One real, deliberate behavior change this surfaced:
+      `TestTriggerCompletionNoSpaceIsNoop` (`:q<Tab>` used to be a no-op)
+      no longer holds now that "no space yet" means "completing a command
+      name" — replaced with
+      `TestTriggerCompletionCompletesCommandName`/`CommandNameNoMatchIsNoop`/
+      `EmptyBufferListsAllCommands` rather than left stale. Widened
+      2026-10-17 to also note arrow-up/down and `<C-p>`/`<C-n>` browsing
+      *command history* on an empty/unmodified buffer (real vim's own
+      `:`-history recall) — **but there's no command-history mechanism
+      anywhere in this codebase today** (confirmed via grep, not assumed),
+      so that half stays split out into **T32** below, deferred rather
+      than silently expanding this task's scope. Verified via
+      `internal/editor/complete_test.go`; `go build`/`vet`/`gofmt`/
+      `test ./...` clean, plus both tagged `gui-local`/`tui-local` builds.
+      (M, ❓)
 - [ ] **T31 — `/pattern<CR>` search, with `<C-n>`/`<C-p>` to cycle
       matches.** The missing half of "find and replace" — only replace
       exists today. The live-highlight mechanism from T29

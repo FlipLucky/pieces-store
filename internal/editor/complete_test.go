@@ -147,13 +147,63 @@ func TestTriggerCompletionNoMatchesIsNoop(t *testing.T) {
 	}
 }
 
-func TestTriggerCompletionNoSpaceIsNoop(t *testing.T) {
+// TestTriggerCompletionCompletesCommandName is T27: no space yet in the
+// buffer (still typing the command name itself) completes against
+// commandNames instead of being a no-op.
+func TestTriggerCompletionCompletesCommandName(t *testing.T) {
 	e := NewEditor("")
-	e.cursor.CommandBuffer = "q"
+	e.cursor.CommandBuffer = "Lsp"
 
 	e.TriggerCompletion()
-	if got := e.GetCommandBuffer(); got != "q" {
-		t.Errorf("buffer = %q, want unchanged %q", got, "q")
+	if got := e.GetCommandBuffer(); got != "LspInstall" {
+		t.Errorf("buffer = %q, want %q", got, "LspInstall")
+	}
+	if n := len(e.GetCursor().Completion.Candidates); n != 3 {
+		t.Errorf("candidates = %d, want 3 (LspInstall/LspStatus/LspUninstall)", n)
+	}
+}
+
+func TestCycleCompletionBrowsesCommandNames(t *testing.T) {
+	e := NewEditor("")
+	e.cursor.CommandBuffer = "Lsp"
+	e.TriggerCompletion() // -> LspInstall
+
+	e.CycleCompletion(1)
+	if got := e.GetCommandBuffer(); got != "LspStatus" {
+		t.Errorf("<C-n>: buffer = %q, want %q", got, "LspStatus")
+	}
+	e.CycleCompletion(1)
+	if got := e.GetCommandBuffer(); got != "LspUninstall" {
+		t.Errorf("<C-n>: buffer = %q, want %q", got, "LspUninstall")
+	}
+	e.CycleCompletion(-1)
+	if got := e.GetCommandBuffer(); got != "LspStatus" {
+		t.Errorf("<C-p>: buffer = %q, want %q", got, "LspStatus")
+	}
+}
+
+func TestTriggerCompletionCommandNameNoMatchIsNoop(t *testing.T) {
+	e := NewEditor("")
+	e.cursor.CommandBuffer = "zzz"
+
+	e.TriggerCompletion()
+	if got := e.GetCommandBuffer(); got != "zzz" {
+		t.Errorf("buffer = %q, want unchanged %q", got, "zzz")
+	}
+	if e.GetCursor().Completion.Active {
+		t.Errorf("Completion.Active = true, want false (no matching command name)")
+	}
+}
+
+// TestTriggerCompletionEmptyBufferListsAllCommands matches real vim's own
+// bare ":<Tab>" behavior — nothing typed yet still lists every command.
+func TestTriggerCompletionEmptyBufferListsAllCommands(t *testing.T) {
+	e := NewEditor("")
+	e.cursor.CommandBuffer = ""
+
+	e.TriggerCompletion()
+	if n := len(e.GetCursor().Completion.Candidates); n != len(commandNames) {
+		t.Errorf("candidates = %d, want %d (every known command)", n, len(commandNames))
 	}
 }
 

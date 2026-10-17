@@ -94,6 +94,15 @@ logic out of `Editor` into the type that should own it, per
   of yank/delete/visual, then named registers alphabetically) and
   centralizes line formatting here rather than duplicating it per
   frontend — see [clipboard-register](clipboard-register.md).
+- `complete.go` — Command mode's `<Tab>`/`<C-n>`/`<C-p>` completion
+  (`TriggerCompletion`/`CycleCompletion` in `editor.go`, this file's
+  `completionCandidates`): a filesystem-path source for `:e`/`:w`'s
+  trailing argument, and (T27, 2026-10-17) a static command-name source
+  (`commandNames`/`commandNameCandidates`) for whenever the buffer has no
+  space yet — i.e. the command name itself is still being typed
+  (`:Lsp<Tab>` → `LspInstall`/`LspStatus`/`LspUninstall`). Both sources
+  feed the same `CompletionState`/popup UI with no frontend changes
+  needed either time.
 - `settings.go` (T28, 2026-10-17) — `:set`, a small starter subset today
   (`number`/`nu`, `nonumber`/`nonu`, `relativenumber`/`rnu`,
   `norelativenumber`/`nornu` — the line-number gutter's own toggle, real
