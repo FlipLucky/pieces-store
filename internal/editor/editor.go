@@ -93,25 +93,6 @@ func NewEditor(initialText string) *Editor {
 	return ed
 }
 
-func NewEditorFromFile(filePath string) (*Editor, error) {
-	table, err := piecetable.NewPieceTableFromFile(filePath)
-	if err != nil {
-		return nil, err
-	}
-	e := &Editor{
-		table:             table,
-		virtualGrid:       viewmanager.NewVirtualGrid(),
-		cursor:            NewCursor(),
-		commandContext:    keyengine.CreateCommandContext(),
-		clipboardRegister: &clipboardregister.ClipboardRegister{},
-		change:            make(chan ChangeEvent, 1),
-	}
-	e.startAsyncLoop()
-	e.setupHighlighterLocked()
-	e.ensureLSPForCurrentBufferLocked()
-	return e, nil
-}
-
 // setupHighlighterLocked (re)creates the highlighter for the table's
 // current FilePath and does an initial full parse — called whenever the
 // table is replaced wholesale (construction, OpenFile, :e), since a new
@@ -135,64 +116,23 @@ func (e *Editor) GetText() string {
 	return e.table.CombinePieces()
 }
 
-func (e *Editor) GetFilePath() string {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.table.FilePath
-}
-
-// Language returns the buffer's detected language, based on its file
-// path's extension (langdetect.Detect) — LanguagePlainText for an
-// unsaved buffer or an unrecognized extension. Computed fresh each call
-// rather than cached, so it's always consistent with the current
-// FilePath with no staleness to manage across OpenFile/:e/SaveAs.
-func (e *Editor) Language() types.Language {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return langdetect.Detect(e.table.FilePath)
-}
-
-func (e *Editor) SaveFile() error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.table.Save()
-}
-
-func (e *Editor) SaveFileAs(filePath string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.table.SaveAs(filePath)
-}
-
-func (e *Editor) OpenFile(filePath string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	newTable, err := piecetable.NewPieceTableFromFile(filePath)
-	if err != nil {
-		return err
-	}
-	e.table = newTable
-	e.cursor.Update(0, 0, 0)
-	e.setupHighlighterLocked()
-	e.ensureLSPForCurrentBufferLocked()
-	e.notifyChange(piecetable.Edit{}) // whole-document replacement, not an incremental delta
-	return nil
-}
-
 func (e *Editor) GetCursor() Cursor {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return *e.cursor
 }
 
-// IndentStringAt returns the leading whitespace — one tab per nesting
-// level — a new line starting at byte offset at should have, per the
-// syntax highlighter's IndentAt. "" wherever there's no highlighter
-// (including LanguagePlainText) or at sits at the top level. Real,
-// tree-based auto-indent: <Enter> in Insert mode and o/O in Normal mode
-// both use this, not a naive "copy the previous line's whitespace" or
-// brace-counting heuristic (see internal/syntax.Highlighter.IndentAt's
-// doc comment for why brace-counting specifically is the wrong call).
+// IndentStringAt returns the leading whitespace a new line starting at
+// byte offset at should have, per the syntax highlighter's own
+// IndentStringAt. "" wherever there's no highlighter (including
+// LanguagePlainText). Real, tree-based auto-indent: <Enter> in Insert
+// mode and o/O in Normal mode both use this, not a naive "copy the
+// previous line's whitespace" or brace-counting heuristic (see
+// internal/syntax.Highlighter.IndentAt's doc comment for why
+// brace-counting specifically is the wrong call). A pure passthrough —
+// the tab-formatting itself lives in internal/syntax (moved there
+// 2026-10-17, T7), since turning a nesting depth into a string is that
+// package's own concern, not Editor's.
 func (e *Editor) IndentStringAt(at int) string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -203,11 +143,7 @@ func (e *Editor) indentStringAtLocked(at int) string {
 	if e.highlighter == nil {
 		return ""
 	}
-	depth := e.highlighter.IndentAt(at)
-	if depth <= 0 {
-		return ""
-	}
-	return strings.Repeat("\t", depth)
+	return e.highlighter.IndentStringAt(at)
 }
 
 // Viewport returns just the lines worth rendering for a window into the
@@ -276,76 +212,6 @@ func (e *Editor) notifyChange(edit piecetable.Edit) {
 	}
 }
 
-// --- Navigation / Vim Movement Engine ---
-
-func (e *Editor) MoveCursorLeft() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	newOffset := offset.MoveLeft(e.table, e.cursor.ByteOffset)
-	e.moveCursorToLocked(newOffset, piecetable.Edit{})
-}
-
-func (e *Editor) MoveCursorRight() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	newOffset := offset.MoveRight(e.table, e.cursor.ByteOffset)
-	e.moveCursorToLocked(newOffset, piecetable.Edit{})
-}
-
-func (e *Editor) MoveCursorUp() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.moveCursorUpLocked()
-}
-
-// moveCursorUpLocked is MoveCursorUp's body, split out so callers that
-// already hold e.mu (e.g. Insert mode's arrow-key handling) can use it
-// instead — MoveCursorUp itself can't be called there, since it would try
-// to lock a mutex Go's sync.Mutex doesn't allow re-entering. Caller must
-// already hold e.mu.
-func (e *Editor) moveCursorUpLocked() {
-	if e.cursor.Row <= 0 {
-		return
-	}
-
-	// No anchor passed here: PositionToByteOffset's anchor only helps when
-	// the target row is at or after it (a forward scan) — Up always
-	// targets a row *before* the current one, so an anchor at the current
-	// position would just trip the "target row is before the anchor"
-	// fallback and rescan from 0 anyway. Genuinely nothing to anchor to
-	// without also tracking each line's start offset.
-	targetPos := offset.Position{Row: e.cursor.Row - 1, Col: e.cursor.Col}
-	newOffset := offset.PositionToByteOffset(e.table, targetPos)
-	e.moveCursorToLocked(newOffset, piecetable.Edit{})
-}
-
-func (e *Editor) MoveCursorDown() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.moveCursorDownLocked()
-}
-
-// moveCursorDownLocked is MoveCursorDown's body — see moveCursorUpLocked's
-// comment for why this split exists. Caller must already hold e.mu.
-func (e *Editor) moveCursorDownLocked() {
-	// Down always targets the row right after the current one, so the
-	// current position is a valid forward-scan anchor — this resumes from
-	// here instead of rescanning the whole buffer from offset 0.
-	targetPos := offset.Position{Row: e.cursor.Row + 1, Col: e.cursor.Col}
-	newOffset := offset.PositionToByteOffset(e.table, targetPos, e.cursor.ByteOffset, e.cursor.Row)
-
-	// If the target row doesn't actually exist (already on the last line),
-	// PositionToByteOffset falls through to doc.Len() — snapping to the
-	// end of the buffer instead of staying put. Detect that and no-op,
-	// matching moveCursorUpLocked's symmetric guard.
-	if actual := offset.ByteOffsetToPosition(e.table, newOffset); actual.Row <= e.cursor.Row {
-		return
-	}
-	e.moveCursorToLocked(newOffset, piecetable.Edit{})
-}
-
 // --- Text Modification Engine ---
 
 func (e *Editor) InsertText(data []byte) {
@@ -407,16 +273,15 @@ func (e *Editor) SetMode(m types.Mode) {
 }
 
 // setModeLocked is SetMode's body — see undoLocked's comment for why this
-// split exists. Caller must already hold e.mu.
+// split exists. Caller must already hold e.mu. Cursor.SetMode owns
+// resetting its own fields (CommandBuffer/Completion/LSPCompletion) for
+// the transition; what's left here is Editor-level state SetMode also
+// needs to clear (completionLineHead) and side effects a mode transition
+// triggers (dismissing hover, notifying frontends).
 func (e *Editor) setModeLocked(m types.Mode) {
 	e.cursor.SetMode(m)
 	if m != types.ModeCommand {
-		e.cursor.CommandBuffer = ""
-		e.cursor.Completion = CompletionState{}
 		e.completionLineHead = ""
-	}
-	if m != types.ModeInsert {
-		e.cursor.LSPCompletion = LSPCompletionState{}
 	}
 	e.dismissHoverLocked()
 	e.notifyChange(piecetable.Edit{})
@@ -433,17 +298,14 @@ var (
 func (e *Editor) AppendCommandBuffer(r rune) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.cursor.CommandBuffer += string(r)
+	e.cursor.CommandBuffer.Append(r)
 	e.notifyChange(piecetable.Edit{})
 }
 
 func (e *Editor) BackspaceCommandBuffer() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if len(e.cursor.CommandBuffer) > 0 {
-		runes := []rune(e.cursor.CommandBuffer)
-		e.cursor.CommandBuffer = string(runes[:len(runes)-1])
-	}
+	e.cursor.CommandBuffer.Backspace()
 	e.notifyChange(piecetable.Edit{})
 }
 
@@ -495,9 +357,8 @@ func (e *Editor) CycleCompletion(direction int) {
 		return
 	}
 
-	n := len(e.cursor.Completion.Candidates)
-	e.cursor.Completion.Index = ((e.cursor.Completion.Index+direction)%n + n) % n
-	e.cursor.CommandBuffer = e.completionLineHead + e.cursor.Completion.Candidates[e.cursor.Completion.Index]
+	e.cursor.Completion.Cycle(direction)
+	e.cursor.CommandBuffer.Set(e.completionLineHead + e.cursor.Completion.Candidates[e.cursor.Completion.Index])
 	e.notifyChange(piecetable.Edit{})
 }
 
@@ -505,7 +366,7 @@ func (e *Editor) CycleCompletion(direction int) {
 // current final token and selects the first one, rewriting the buffer to
 // match. Caller must already hold e.mu.
 func (e *Editor) startCompletionLocked() {
-	lineHead, candidates := completionCandidates(e.cursor.CommandBuffer)
+	lineHead, candidates := completionCandidates(e.cursor.CommandBuffer.String())
 	if len(candidates) == 0 {
 		e.cursor.Completion = CompletionState{}
 		e.completionLineHead = ""
@@ -514,7 +375,7 @@ func (e *Editor) startCompletionLocked() {
 	}
 	e.completionLineHead = lineHead
 	e.cursor.Completion = CompletionState{Active: true, Candidates: candidates}
-	e.cursor.CommandBuffer = lineHead + candidates[0]
+	e.cursor.CommandBuffer.Set(lineHead + candidates[0])
 	e.notifyChange(piecetable.Edit{})
 }
 
@@ -536,7 +397,7 @@ func (e *Editor) CancelCompletion() {
 func (e *Editor) ClearCommandBuffer() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.cursor.CommandBuffer = ""
+	e.cursor.CommandBuffer.Clear()
 	e.notifyChange(piecetable.Edit{})
 }
 
@@ -581,7 +442,7 @@ func (e *Editor) executeCommandLocked(rawCmd string) error {
 	cmd := exmode.Parse(rawCmd)
 	if cmd.Name == "" {
 		e.cursor.SetMode(types.ModeNormal)
-		e.cursor.CommandBuffer = ""
+		e.cursor.CommandBuffer.Clear()
 		return nil
 	}
 
@@ -640,7 +501,7 @@ func (e *Editor) executeCommandLocked(rawCmd string) error {
 	}
 
 	e.cursor.SetMode(types.ModeNormal)
-	e.cursor.CommandBuffer = ""
+	e.cursor.CommandBuffer.Clear()
 	e.notifyChange(piecetable.Edit{})
 	return err
 }
@@ -709,5 +570,5 @@ func (e *Editor) GetModeInt() int {
 func (e *Editor) GetCommandBuffer() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.cursor.CommandBuffer
+	return e.cursor.CommandBuffer.String()
 }

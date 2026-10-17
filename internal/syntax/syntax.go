@@ -263,6 +263,19 @@ func (h *Highlighter) IndentAt(at int) int {
 	return depth
 }
 
+// IndentStringAt turns IndentAt's level into actual leading whitespace —
+// one tab per level, "" at the top level (or wherever IndentAt returns 0).
+// Moved here from Editor (2026-10-17, T7): formatting a tab string out of
+// an indent depth is this package's own concern, not Editor's — Editor's
+// own IndentStringAt is a pure passthrough to this one.
+func (h *Highlighter) IndentStringAt(at int) string {
+	depth := h.IndentAt(at)
+	if depth <= 0 {
+		return ""
+	}
+	return strings.Repeat("\t", depth)
+}
+
 // styleFor maps a tree-sitter capture name (e.g. "keyword", "function.method")
 // down to a types.Style by prefix — captures are conventionally dotted,
 // more specific toward the right, and a consumer is free to match at

@@ -788,6 +788,28 @@ doc comment rather than per-function, per the naming/locking convention
 this same task originally proposed (see this file's Documentation
 conventions section).
 
+**The `internal/editor` structural refactor's remainder landed, 2026-10-17**
+(`ATOMIC_TASKS.md`'s T4–T9) — the mechanical reconnect items left over from
+the 2026-09-24 review (`langdetect`/`autopairs`/`exmode`/`lspservice` were
+done earlier). Each pulled logic out of `Editor` into the type that should
+own it, per [the orchestrator doesn't play an instrument](docs/concepts/orchestrator-instrument.md):
+`Cursor.SetMode` now resets its own `CommandBuffer`/`Completion`/
+`LSPCompletion` fields on a mode transition instead of `Editor` reaching in
+from outside (T4); `CommandBuffer` became its own type
+(`Append`/`Backspace`/`Clear`/`Set`/`String`) rather than a raw `string`
+poked at directly — `Set` was a needed addition beyond the originally-named
+four methods, since path completion rewrites the buffer's entire content
+wholesale (T5); `CompletionState`/`LSPCompletionState` each gained their own
+`Cycle(direction)` wraparound-math method (T6); `syntax.Highlighter`'s new
+`IndentStringAt` does the tab-formatting, leaving `Editor`'s version a pure
+passthrough (T7); file-related `Editor` methods moved into a new
+`internal/editor/file.go` (T8); `MoveCursorLeft/Right/Up/Down` (+ their
+`*Locked` bodies) moved into `cursor.go` — a pure file-organization move,
+still `*Editor` methods since they need `e.table`/`e.mu` (T9). All pure
+moves/extractions with no behavior change — every pre-existing test passes
+unchanged, confirmed via `go build`/`vet`/`gofmt`/`test` after each item,
+plus both tagged `gui-local`/`tui-local` builds clean at the end.
+
 ## Module & toolchain
 
 - Module: `github.com/fliplucky/pieces-store`

@@ -257,8 +257,7 @@ func (e *Editor) cycleLSPCompletionLocked(direction int) {
 	if !e.cursor.LSPCompletion.Active {
 		return
 	}
-	n := len(e.cursor.LSPCompletion.Items)
-	e.cursor.LSPCompletion.Index = ((e.cursor.LSPCompletion.Index+direction)%n + n) % n
+	e.cursor.LSPCompletion.Cycle(direction)
 	e.notifyChange(piecetable.Edit{})
 }
 

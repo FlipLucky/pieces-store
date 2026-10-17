@@ -115,35 +115,56 @@ history-only status. Kept below for the record, not as a pending list.
       stays explicitly out of scope per `DESIGN_KEY_PIPELINE.md`'s own
       scope boundary.
 
-## 2. Structural refactor — remainder
+## 2. Structural refactor — remainder — done ✅
 
-All mechanical reconnect work, same discipline as the four pieces already
-done (`langdetect`, `autopairs`, `exmode`, `lspservice` — see `BACKLOG.md`
-for what "done" looked like each time). Every item here is the same
-underlying move: pulling logic out of `Editor` into the type that should
-own it — see [decoupling rule / conveyor-belt splitter](docs/concepts/decoupling-splitter.md)
+Done 2026-10-17. All mechanical reconnect work, same discipline as the four
+pieces already done (`langdetect`, `autopairs`, `exmode`, `lspservice` — see
+`BACKLOG.md` for what "done" looked like each time) and the same discipline
+as every module before it this session: real current code read first,
+extract, reconnect every call site, then `go build`/`vet`/`gofmt`/`test`
+clean (plus both tagged `gui-local`/`tui-local` builds) before moving to the
+next one. Every item here is the same underlying move: pulling logic out of
+`Editor` into the type that should own it — see
+[decoupling rule / conveyor-belt splitter](docs/concepts/decoupling-splitter.md)
 and [the orchestrator doesn't play an instrument](docs/concepts/orchestrator-instrument.md).
 
-- [ ] **T4** — Move `SetMode`'s mode-transition cleanup onto
-      `Cursor.SetMode` instead of `Editor` reaching into `Cursor`'s fields
-      from outside. (M, 🔧)
-- [ ] **T5** — Give `CommandBuffer` its own type (`Append`/`Backspace`/
-      `Clear`/`String`) instead of a raw string field poked at by `Editor`
-      methods. **Note:** this is also a soft prerequisite for Command
-      mode's eventual Validator stage, if/when `:s///` (Section 4 below)
-      needs one — see [Validator → Processor → Executor](docs/concepts/validator-processor-executor.md) —
-      don't do it twice. (M, 🔧)
-- [ ] **T6** — Give `CompletionState`/`LSPCompletionState` their own
-      `Cycle(direction)` method instead of `Editor` doing the wraparound
-      math externally. (S, 🔧)
-- [ ] **T7** — Move `IndentStringAt`'s tab-formatting into
-      `internal/syntax.Highlighter.IndentStringAt`, so `Editor`'s version
-      becomes a pure passthrough. (S, 🔧)
-- [ ] **T8** — Split file-related `Editor` methods (`NewEditorFromFile`,
+- [x] **T4** — `Cursor.SetMode` now resets its own `CommandBuffer`/
+      `Completion`/`LSPCompletion` fields on a mode transition, instead of
+      `Editor.setModeLocked` reaching in field by field from outside.
+      `Editor`-level cleanup the transition also needs
+      (`completionLineHead`, dismissing hover, notifying frontends) stays
+      in `setModeLocked` — hover's dismissal isn't exclusively a mode-
+      transition concern (cursor movement triggers the same dismiss), so
+      it wasn't folded into `Cursor.SetMode` too.
+- [x] **T5** — New `CommandBuffer` type (`Append`/`Backspace`/`Clear`/
+      `Set`/`String`), replacing the raw `string` field. `Set` was a
+      needed addition beyond the originally-named four methods — path
+      completion rewrites the buffer's entire content wholesale, not via
+      append/backspace. Being a named string type under the hood, `%s`
+      formatting and direct string-literal assignment/comparison (as
+      existing tests already did) both kept working with zero call-site
+      changes beyond the methods themselves.
+- [x] **T6** — `CompletionState`/`LSPCompletionState` each got their own
+      `Cycle(direction)` method (the wraparound math, kept as two separate
+      methods since the types hold different candidate slices —
+      `Candidates` vs. `Items`), replacing `Editor.CycleCompletion`/
+      `cycleLSPCompletionLocked` computing it externally against the
+      fields.
+- [x] **T7** — `internal/syntax.Highlighter.IndentStringAt` now does the
+      tab-formatting (`IndentAt`'s depth → a literal tab string);
+      `Editor.indentStringAtLocked` is a pure passthrough.
+- [x] **T8** — File-related `Editor` methods (`NewEditorFromFile`,
       `OpenFile`, `SaveFile`, `SaveFileAs`, `GetFilePath`, `Language()`)
-      into `internal/editor/file.go`. Pure move, no logic change. (S, 🔧)
-- [ ] **T9** — Move `MoveCursorLeft/Right/Up/Down` (+ `*Locked` bodies) out
-      of `editor.go` into `cursor.go`. Pure move, no logic change. (S, 🔧)
+      moved into new `internal/editor/file.go`, pure move, no logic
+      change — `setupHighlighterLocked` and `:e`'s handling in
+      `executeCommandLocked` deliberately stayed in `editor.go` (not
+      explicitly in scope, still called fine from the new file since it's
+      the same package).
+- [x] **T9** — `MoveCursorLeft/Right/Up/Down` + their `*Locked` bodies
+      moved into `cursor.go`, pure move, no logic/receiver change (they
+      stay `*Editor` methods — they need `e.table`/`e.mu`/
+      `e.moveCursorToLocked`, which only `Editor` has; this is a file-
+      organization move, not a receiver-type change).
 
 ## 3. Registers & real yank/paste — done ✅
 

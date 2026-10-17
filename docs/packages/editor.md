@@ -55,6 +55,32 @@ not repeated on each helper. No external package should ever need to know
 or care that locking happens at all. See CLAUDE.md's Documentation
 conventions section.
 
+## Structural refactor, T4–T9 (2026-10-17)
+
+The mechanical remainder of the 2026-09-24 review (`langdetect`/
+`autopairs`/`exmode`/`lspservice` were done earlier) — each item pulled
+logic out of `Editor` into the type that should own it, per
+[the orchestrator doesn't play an instrument](../concepts/orchestrator-instrument.md):
+
+- `Cursor.SetMode` resets its own `CommandBuffer`/`Completion`/
+  `LSPCompletion` fields on a mode transition, instead of `Editor`
+  reaching into `Cursor`'s fields from outside. `Editor`-level cleanup a
+  transition also needs (`completionLineHead`, dismissing hover,
+  notifying frontends) stays in `setModeLocked`.
+- `CommandBuffer` is its own type (`cursor.go`) — `Append`/`Backspace`/
+  `Clear`/`Set`/`String`, a named `string` under the hood so `%s`
+  formatting and string-literal comparisons keep working unchanged.
+- `CompletionState`/`LSPCompletionState` each have a `Cycle(direction)`
+  method for the wraparound math, kept separate since the two hold
+  different candidate slices.
+- `internal/syntax.Highlighter.IndentStringAt` does the tab-formatting;
+  `Editor.indentStringAtLocked` is a pure passthrough.
+- File-related methods (`NewEditorFromFile`, `OpenFile`, `SaveFile`,
+  `SaveFileAs`, `GetFilePath`, `Language()`) live in `file.go`.
+- `MoveCursorLeft/Right/Up/Down` (+ `*Locked` bodies) live in `cursor.go`
+  — still `*Editor` methods (they need `e.table`/`e.mu`), a pure file
+  move, not a receiver-type change.
+
 ## Other responsibilities
 
 - File I/O, vim-style command mode (`:w`, `:e`, `:q`/`:q!`, `:wq`,
