@@ -850,6 +850,88 @@ same `:h` entry point later, e.g. `:h daw` for a full explanation).
       anything currently in `gui-base`'s own rendering. (M/L, 🧠 — real
       interaction + data-source design, worth scoping deliberately)
 
+## 10. Stage 2 completion — treesitter/LSP extensions (2026-10-18)
+
+Closes out `FEATURES.md`'s Stage 2 list (everything there except **T42**,
+which stays its own separate arc — markdown rendering needs a genuinely new
+rendering mechanism, not an extension of infra that already works, the
+real dividing line used to scope this batch). Worked in this order —
+quick wins first, the item needing real investigation last:
+
+- [ ] **T51 — Format-on-save, behind a `:set` toggle.** Not always-on —
+      "not everyone wants it." A new boolean option alongside T28's
+      `number`/`relativenumber` precedent (`internal/editor/settings.go`);
+      `executeCommandLocked`'s `"w"`/`"write"` case calls
+      `startFormatLocked()` before saving, only when the toggle is set.
+      Deliberately in-memory-only for now, same as every other `:set`
+      option today — real persistence across sessions waits on the "real
+      config file" item already flagged in `FEATURES.md`'s Cross-cutting
+      section as its own dependency hub, not solved here. (S, 🔧)
+- [ ] **T49 — Organize-imports / auto-import on completion.** Extends code
+      that already works rather than new protocol surface: confirm whether
+      `lspclient`'s completion handling reads a real server's
+      `additionalTextEdits` field on a `CompletionItem` (the actual
+      import-adding edit real servers attach alongside the main one) —
+      if it's being dropped today, wire it through `applyTextEditsLocked`,
+      which already exists for `:Format`. (S/M, 🔧)
+- [ ] **T44 — Smarter `%` bracket matching.** Doesn't exist at all today
+      (confirmed, not assumed). Scoped to a first version that's "smart"
+      only in skipping brackets inside strings/comments — reuses
+      `StyleSpans` we already compute, no new treesitter query needed.
+      Full `vim-matchup`-level scope (tag pairs, `if`/`else`/`end` keyword
+      pairs) is a real stretch goal, not blocking this task. (M, 🔧)
+- [ ] **T48 — Semantic highlighting.** `textDocument/semanticTokens/full`,
+      merged into `StyleSpans` with the same precedence pattern
+      diagnostics already use (overrides tree-sitter's syntax color at the
+      same byte). New `lspclient` wiring: parsing the delta-encoded token
+      array against the legend negotiated at `initialize` time. No new
+      rendering mechanism — color only, both frontends already apply
+      `StyleSpans` the same way. (M, 🧠)
+- [ ] **T46 — Signature help.** `textDocument/signatureHelp`, triggered on
+      `(`/`,` the same way completion already triggers on server-advertised
+      characters. Reuses the existing `Cursor.HoverState` shape directly (a
+      sibling state, same popup-rendering path in both frontends) — no new
+      UI primitive needed. (M, 🧠)
+- [ ] **T43 — Treesitter-powered text objects** (`if`/`af`, `ic`/`ac`,
+      parameter objects). **Needs real investigation before implementation,
+      not just wiring** — same discipline the original syntax-highlighting
+      work used (a from-scratch prototype verifying capture-name coverage
+      before committing, not assumed): does `gotreesitter`'s bundled
+      grammar set actually ship `textobjects.scm`-style queries with
+      `@function.outer`/`@function.inner`-convention captures? If not, this
+      means writing those queries per language — a materially bigger scope
+      than "just wire it up," and worth knowing before starting rather than
+      discovering mid-task. (L, 🧠 — confirm scope first)
+- [ ] **T50 — GUI popup pixel-exact positioning.** Real op-recording for a
+      rune's actual screen position (capturing the layout op during
+      `renderStyledRunes`' per-rune pass and reading its transform back),
+      replacing today's font-metric estimate
+      (`charWidthPx`/`lineHeightPx`). Self-contained Gio investigation,
+      independent of everything else in this batch — can slot in whenever
+      convenient. (M, 🧠)
+
+## 10b. Deferred from this batch
+
+- [ ] **T45 — Buffer-word completion fallback.** Deferred, not committed to
+      this batch — genuine open question, not yet resolved: real vim's own
+      buffer-keyword completion (`<C-n>`/`<C-p>` in Insert mode, outside
+      any LSP popup) is a *separate*, manually-triggered mechanism from
+      LSP's automatic trigger-character popup, not blended into it — but
+      whether to match that distinction (separate trigger, own popup) or
+      blend buffer words into `LSPCompletionState`'s results as fallback
+      candidates is a real design fork with no clear answer yet. Revisit
+      once there's real daily-use signal — specifically, editing a file
+      with no LSP server attached, the actual scenario this feature exists
+      for — rather than deciding it in the abstract now. (M, ❓)
+- [ ] **T47 — Inlay hints.** Deferred, tied to **T42**: hint text isn't
+      part of the buffer, so rendering it inline mid-line hits the exact
+      same column-math re-derivation problem T42 already needs to solve
+      for concealed markdown (a line's on-screen width diverging from its
+      byte length, breaking cursor/hover-popup column math unless
+      re-derived). Rather than invent a second rendering mechanism for the
+      same class of problem, T47 should piggyback on whatever T42 builds,
+      not be attempted independently. (M, 🧠 — blocked on T42's mechanism)
+
 ## Longer horizon — browse, don't start yet
 
 - **Visual mode** — real design work (operators act directly on a

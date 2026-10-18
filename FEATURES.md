@@ -222,29 +222,33 @@ formatting) verified against a real `gopls`. What's left:
   preview (the `peek.nvim` shape, from the dotfiles research) was the other
   real option on the table and is superseded by this choice, not pursued
   separately.
-- **Treesitter-powered text objects** (function/class/argument/conditional/
-  loop — `if`/`af` etc.) — builds directly on the parse trees already kept
-  per buffer for highlighting/indent, not starting from zero. Matches
-  `mini.ai`'s custom-textobjects config from the dotfiles research.
-- **Smarter `%` bracket/tag matching** (treesitter-aware, beyond bare
-  bracket counting — the `vim-matchup` idea from the dotfiles research) —
-  same infra reuse as above.
+- **Treesitter-powered text objects** (`ATOMIC_TASKS.md`'s **T43**;
+  function/class/argument/conditional/loop — `if`/`af` etc.) — builds
+  directly on the parse trees already kept per buffer for highlighting/
+  indent, not starting from zero. Matches `mini.ai`'s custom-textobjects
+  config from the dotfiles research.
+- **Smarter `%` bracket/tag matching** (**T44**; treesitter-aware, beyond
+  bare bracket counting — the `vim-matchup` idea from the dotfiles
+  research) — same infra reuse as above.
 - **Richer completion sources** — buffer-word completion blended with the
   existing LSP+path sources (the `blink.cmp` idea from the dotfiles
-  research); today's completion is LSP-or-path only.
+  research); today's completion is LSP-or-path only. Deferred as
+  **T45**, pending real design signal (see `ATOMIC_TASKS.md`).
 - **LSP feature extensions**, natural extensions of the already-working
-  client: signature help, inlay hints, semantic highlighting (LSP semantic
-  tokens layered over tree-sitter's syntactic highlighting), organize-
-  imports/auto-import on completion. Code actions/quick-fixes stay
-  explicitly deferred as "Part 4," per `CLAUDE.md` — restated for
-  completeness, not a new idea.
-- **The GUI popup-position approximation** (hover/completion anchored by
-  estimated font metrics, not real pixel coordinates) — a known, accepted
-  limitation, worth real op-recording if it's ever visually off enough to
-  matter.
-- **Format-on-save** — trivial given `:Format` already exists; just needs
-  a save-time hook (the `conform.nvim` autocmd idea from the dotfiles
-  research).
+  client: signature help (**T46**), inlay hints (**T47**, deferred —
+  shares T42's column-math problem, piggybacks on its mechanism rather
+  than inventing a second one), semantic highlighting (**T48**; LSP
+  semantic tokens layered over tree-sitter's syntactic highlighting),
+  organize-imports/auto-import on completion (**T49**). Code actions/
+  quick-fixes stay explicitly deferred as "Part 4," per `CLAUDE.md` —
+  restated for completeness, not a new idea.
+- **The GUI popup-position approximation** (**T50**; hover/completion
+  anchored by estimated font metrics, not real pixel coordinates) — a
+  known, accepted limitation, worth real op-recording if it's ever
+  visually off enough to matter.
+- **Format-on-save** (**T51**, behind a `:set` toggle — not everyone wants
+  it) — trivial given `:Format` already exists; just needs a save-time
+  hook (the `conform.nvim` autocmd idea from the dotfiles research).
 
 ### Cross-cutting — pick up anytime, not gated by any stage
 
