@@ -858,15 +858,51 @@ rendering mechanism, not an extension of infra that already works, the
 real dividing line used to scope this batch). Worked in this order —
 quick wins first, the item needing real investigation last:
 
-- [ ] **T51 — Format-on-save, behind a `:set` toggle.** Not always-on —
-      "not everyone wants it." A new boolean option alongside T28's
-      `number`/`relativenumber` precedent (`internal/editor/settings.go`);
-      `executeCommandLocked`'s `"w"`/`"write"` case calls
-      `startFormatLocked()` before saving, only when the toggle is set.
-      Deliberately in-memory-only for now, same as every other `:set`
-      option today — real persistence across sessions waits on the "real
-      config file" item already flagged in `FEATURES.md`'s Cross-cutting
-      section as its own dependency hub, not solved here. (S, 🔧)
+- [x] **T51 — Format-on-save, behind a `:set` toggle.** Done 2026-10-18.
+      Not always-on — "not everyone wants it": a new `formatOnSave bool`
+      alongside T28's `number`/`relativenumber` precedent
+      (`internal/editor/settings.go`'s `:set formatonsave`/
+      `:set noformatonsave`, `FormatOnSave()` accessor). The real design
+      problem this task actually turned on, caught before writing any code
+      rather than discovered as a bug later: formatting is an *asynchronous*
+      LSP round trip (`startFormatLocked` kicks off a request and returns
+      immediately; the edits apply later via `runAsync`'s callback), so
+      naively calling "format, then save" in sequence inside `:w` would
+      have saved the file's *pre-formatted* content — the save would run
+      before the async edits ever arrived. New `executeWriteLocked`
+      (`internal/editor/lspfeatures.go`, next to `startFormatLocked`) is
+      the real fix: when the toggle is off, or no server is running/capable
+      of formatting, it's a plain synchronous save (identical to before —
+      a missing/incapable server never blocks the save itself). When the
+      toggle is on and a capable server exists, the save itself moves
+      *inside* the format request's async callback — `saveLocked` (a new
+      small helper factoring out the existing Save/SaveAs choice) runs only
+      after the formatted edits have actually been applied, reporting
+      `"formatted and saved"` via `StatusMessage` (or `"saved (format
+      failed: ...)"` if the format request itself errored — a failed format
+      still saves the user's real edits rather than blocking the save).
+      `:wq` deliberately does **not** route through this — composing
+      "format, then save, then quit" correctly would mean deferring
+      `isQuitRequested` into the same async callback too (today's quit
+      check happens immediately after `HandleKey`/`ExecuteCommand`
+      returns, so quitting before an in-flight async save completes would
+      silently lose it) — flagged explicitly as a real, deliberate scope
+      narrowing in a code comment rather than left as an unexplained
+      inconsistency between `:w` and `:wq`. Deliberately in-memory-only,
+      same as every other `:set` option today — real persistence waits on
+      the "real config file" item already flagged in `FEATURES.md`'s
+      Cross-cutting section as its own dependency hub. Verified two ways:
+      fast unit tests for the toggle and the no-server fallback path
+      (`internal/editor/settings_test.go`), and a real end-to-end test
+      against actual `gopls` (`TestRealFormatOnSaveEndToEnd`,
+      `LSPMANAGER_INTEGRATION=1`) proving the save genuinely waits for the
+      formatted content rather than racing ahead of it — the one way a
+      naive implementation would have silently shipped the bug this task
+      was designed around. The existing real-gopls test's setup was
+      factored into a shared `setupRealGoplsEditor` helper rather than
+      duplicated for the second test. `go build`/`vet`/`gofmt`/
+      `test ./...` all clean, plus both tagged `gui-local`/`tui-local`
+      builds. (S, 🔧)
 - [ ] **T49 — Organize-imports / auto-import on completion.** Extends code
       that already works rather than new protocol surface: confirm whether
       `lspclient`'s completion handling reads a real server's

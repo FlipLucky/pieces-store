@@ -103,16 +103,33 @@ logic out of `Editor` into the type that should own it, per
   (`:Lsp<Tab>` → `LspInstall`/`LspStatus`/`LspUninstall`). Both sources
   feed the same `CompletionState`/popup UI with no frontend changes
   needed either time.
-- `settings.go` (T28, 2026-10-17) — `:set`, a small starter subset today
-  (`number`/`nu`, `nonumber`/`nonu`, `relativenumber`/`rnu`,
-  `norelativenumber`/`nornu` — the line-number gutter's own toggle, real
-  vim's two independent options not a three-way enum). Each option is its
-  own pair of unexported `Editor` fields rather than a generic string-keyed
-  map, matching this codebase's "add a table entry/case, not a new
-  mechanism" extension style; a future option is another `case` here.
-  `LineNumberSettings()` exposes the on/off state read-only — `Editor`
-  itself does no gutter-rendering math, that lives in
-  [viewmanager](viewmanager.md)'s `GutterWidth`/`GutterText`.
+- `settings.go` (T28, 2026-10-17; T51, 2026-10-18) — `:set`, a small
+  starter subset today (`number`/`nu`, `nonumber`/`nonu`,
+  `relativenumber`/`rnu`, `norelativenumber`/`nornu` — the line-number
+  gutter's own toggle, real vim's two independent options not a three-way
+  enum; `formatonsave`/`noformatonsave` — off by default). Each option is
+  its own `Editor` field rather than a generic string-keyed map, matching
+  this codebase's "add a table entry/case, not a new mechanism" extension
+  style; a future option is another `case` here. `LineNumberSettings()`/
+  `FormatOnSave()` expose the on/off state read-only — `Editor` itself does
+  no gutter-rendering math (that lives in [viewmanager](viewmanager.md)'s
+  `GutterWidth`/`GutterText`) and no format-on-save *logic* here either
+  (that's `lspfeatures.go`'s `executeWriteLocked`, below). Nothing
+  persists across restarts yet — a real config file is its own,
+  not-yet-built dependency hub (see `FEATURES.md`'s Cross-cutting
+  section).
+- `lspfeatures.go`'s `executeWriteLocked`/`saveLocked` (T51, 2026-10-18) —
+  `:w`/`:write`'s real behavior once format-on-save exists, not just a
+  precondition check: formatting is an *asynchronous* LSP round trip
+  (`startFormatLocked` returns immediately; edits apply later via
+  `runAsync`'s callback), so "format, then save" can't just run in
+  sequence — the save would complete before the formatted edits arrive.
+  When the toggle is on and a capable server exists, `saveLocked` runs
+  *inside* the format request's own async callback instead, after its
+  edits are applied; off, or no capable server, falls through to a plain
+  synchronous save, unchanged from before. `:wq` deliberately doesn't
+  route through this — see its own code comment for why composing the
+  quit signal in too is real, deferred work, not an oversight.
 - `async.go` — the answer to async orchestration: an `asyncResults`
   channel drained by one dedicated goroutine that takes `e.mu.Lock()`
   around each queued closure. Every async producer (LSP install,

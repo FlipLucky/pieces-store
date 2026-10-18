@@ -150,6 +150,65 @@ func (e *Editor) startFormatLocked() error {
 	return nil
 }
 
+// ---- Format-on-save (T51) ----
+
+// executeWriteLocked is ":w"/":write"'s behavior — composes with
+// format-on-save rather than just preceding it, since formatting is an
+// asynchronous LSP round trip: a save can't simply call startFormatLocked
+// and then save immediately after, because the formatted edits wouldn't
+// have arrived yet. When the toggle is off, or no server is running/
+// capable of formatting, this behaves exactly like a plain save always
+// did — a missing/incapable server doesn't block the save itself, only
+// the formatting part of it. Caller must already hold e.mu.
+func (e *Editor) executeWriteLocked(path string) error {
+	if !e.formatOnSave {
+		return e.saveLocked(path)
+	}
+
+	server := e.lspService.Server
+	caps := e.lspService.Capabilities
+	if server == nil || !lspclient.Supported(caps.DocumentFormattingProvider) {
+		return e.saveLocked(path)
+	}
+
+	uri := e.lspService.URI
+	baseSource := []byte(e.table.CombinePieces())
+	e.setStatusMessageLocked("formatting before save...")
+
+	e.runAsync(func() asyncApply {
+		edits, formatErr := server.Formatting(uri)
+		return func(ed *Editor) {
+			if !ed.lspService.IsCurrent(server) {
+				return // stale — a different buffer/server is active now
+			}
+			if formatErr == nil && len(edits) > 0 {
+				ed.applyTextEditsLocked(edits, baseSource)
+			}
+			if saveErr := ed.saveLocked(path); saveErr != nil {
+				ed.setStatusMessageLocked(fmt.Sprintf("save failed: %v", saveErr))
+				return
+			}
+			if formatErr != nil {
+				ed.setStatusMessageLocked(fmt.Sprintf("saved (format failed: %v)", formatErr))
+				return
+			}
+			ed.setStatusMessageLocked("formatted and saved")
+		}
+	})
+	return nil
+}
+
+// saveLocked saves to path if given, or the buffer's existing file path
+// otherwise — the same Save/SaveAs choice ":w [file]" always made,
+// factored out so executeWriteLocked's async callback and its synchronous
+// no-formatting path share it. Caller must already hold e.mu.
+func (e *Editor) saveLocked(path string) error {
+	if path != "" {
+		return e.table.SaveAs(path)
+	}
+	return e.table.Save()
+}
+
 // applyTextEditsLocked applies a server's edit list against baseSource —
 // the document content as it was when the request that produced edits was
 // sent, needed to convert each edit's LSP Position range into a byte

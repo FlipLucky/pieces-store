@@ -79,6 +79,13 @@ type Editor struct {
 	// an actual user habit, not a hypothetical).
 	showLineNumbers     bool
 	relativeLineNumbers bool
+	// formatOnSave backs ":set formatonsave" (T51) — off by default, since
+	// silently reformatting on every save is a real surprise if you didn't
+	// ask for it. See executeWriteLocked for why this can't just be
+	// "call startFormatLocked, then save": formatting is an asynchronous
+	// LSP round trip, so the two have to be composed (save happens inside
+	// the format's own async callback), not sequenced naively.
+	formatOnSave bool
 }
 
 // ChangeEvent describes one change to the editor's state, delivered on
@@ -470,11 +477,11 @@ func (e *Editor) executeCommandLocked(rawCmd string) error {
 
 	switch cmd.Name {
 	case "w", "write":
+		path := ""
 		if len(cmd.Args) > 0 {
-			err = e.table.SaveAs(cmd.Args[0])
-		} else {
-			err = e.table.Save()
+			path = cmd.Args[0]
 		}
+		err = e.executeWriteLocked(path)
 	case "e", "edit":
 		if len(cmd.Args) > 0 {
 			newTable, openErr := piecetable.NewPieceTableFromFile(cmd.Args[0])
@@ -500,6 +507,14 @@ func (e *Editor) executeCommandLocked(rawCmd string) error {
 		err = ErrQuit
 		e.isQuitRequested = true
 	case "wq":
+		// Deliberately doesn't go through executeWriteLocked/format-on-save
+		// (T51): formatting is an async LSP round trip, and isQuitRequested
+		// below needs to be true before this function returns, or the
+		// frontend's post-HandleKey quit check never fires. Composing
+		// "format, then save, then quit" correctly would mean deferring the
+		// quit signal into the async callback too — real, but a bigger
+		// change than this task's scope; :wq stays a plain, synchronous
+		// save-then-quit regardless of the formatonsave toggle for now.
 		if saveErr := e.table.Save(); saveErr != nil {
 			err = saveErr
 		} else {

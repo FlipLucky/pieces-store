@@ -117,54 +117,10 @@ func TestRealHoverAutocompleteAndFormatEndToEnd(t *testing.T) {
 	if os.Getenv("LSPMANAGER_INTEGRATION") == "" {
 		t.Skip("set LSPMANAGER_INTEGRATION=1 to run a real gopls end-to-end")
 	}
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skip("no go toolchain on PATH")
-	}
-	isolateLSPCacheDir(t)
-
-	serversDir, err := platform.LSPServersDir()
-	if err != nil {
-		t.Fatalf("platform.LSPServersDir() error = %v", err)
-	}
-	entry, _ := lspmanager.EntryFor(types.LanguageGo)
-	specs, err := lspmanager.LoadPackages(t.TempDir(), map[string]bool{"gopls": true}, time.Hour, nil)
-	if err != nil {
-		t.Fatalf("LoadPackages() error = %v", err)
-	}
-	installed, err := lspmanager.Install(serversDir, specs["gopls"], entry, nil)
-	if err != nil {
-		t.Fatalf("Install(gopls) error = %v", err)
-	}
-	if err := lspmanager.RecordInstalled(serversDir, installed); err != nil {
-		t.Fatalf("RecordInstalled() error = %v", err)
-	}
-
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module probe\n\ngo 1.21\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	// Deliberately mis-indented (a real gofmt violation: a space instead
 	// of a tab) so :Format has a genuine, verifiable change to make.
 	source := "package main\n\nimport \"fmt\"\n\nfunc main() {\n fmt.Println(\"hi\")\n}\n"
-	mainGo := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(mainGo, []byte(source), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	e, err := NewEditorFromFile(mainGo)
-	if err != nil {
-		t.Fatalf("NewEditorFromFile() error = %v", err)
-	}
-	t.Cleanup(func() {
-		e.mu.Lock()
-		server := e.lspService.Server
-		e.mu.Unlock()
-		if server != nil {
-			_ = server.Stop()
-		}
-	})
-
-	waitForLSPReady(t, e)
+	e, _ := setupRealGoplsEditor(t, source)
 
 	// --- Hover: place the cursor inside "Println" and request hover ---
 	printlnOffset := strings.Index(source, "Println") + 2
@@ -247,6 +203,104 @@ func TestRealHoverAutocompleteAndFormatEndToEnd(t *testing.T) {
 		t.Errorf("formatted buffer = %q, want a tab-indented fmt.Println line", formatted)
 	}
 	t.Logf("formatted buffer: %q", formatted)
+}
+
+// TestRealFormatOnSaveEndToEnd is T51's real end-to-end proof: with
+// formatonsave on, a plain ":w" (no ":Format" in sight) still produces a
+// formatted file on disk — confirming executeWriteLocked actually composes
+// the async format response with the save rather than racing ahead of it,
+// which is the one way a naive "format, then save" implementation would
+// have silently saved the pre-formatted content instead.
+func TestRealFormatOnSaveEndToEnd(t *testing.T) {
+	if os.Getenv("LSPMANAGER_INTEGRATION") == "" {
+		t.Skip("set LSPMANAGER_INTEGRATION=1 to run a real gopls end-to-end")
+	}
+	source := "package main\n\nimport \"fmt\"\n\nfunc main() {\n fmt.Println(\"hi\")\n}\n"
+	e, mainGo := setupRealGoplsEditor(t, source)
+
+	if err := e.ExecuteCommand(":set formatonsave"); err != nil {
+		t.Fatalf("ExecuteCommand(:set formatonsave) error = %v", err)
+	}
+	if !e.FormatOnSave() {
+		t.Fatal("FormatOnSave() = false after :set formatonsave")
+	}
+
+	if err := e.ExecuteCommand(":w"); err != nil {
+		t.Fatalf("ExecuteCommand(:w) error = %v", err)
+	}
+	waitFor(t, 15*time.Second, func() bool {
+		msg := e.StatusMessage()
+		return msg == "formatted and saved" || strings.Contains(msg, "failed")
+	}, "format-on-save never reached a terminal status")
+	if msg := e.StatusMessage(); strings.Contains(msg, "failed") {
+		t.Fatalf("format-on-save reported failure: %s", msg)
+	}
+
+	onDisk, err := os.ReadFile(mainGo)
+	if err != nil {
+		t.Fatalf("reading saved file: %v", err)
+	}
+	if strings.Contains(string(onDisk), "\n fmt.Println") {
+		t.Errorf("saved file still contains the mis-indented line: %q", onDisk)
+	}
+	if !strings.Contains(string(onDisk), "\tfmt.Println") {
+		t.Errorf("saved file = %q, want a tab-indented fmt.Println line", onDisk)
+	}
+}
+
+// setupRealGoplsEditor installs a real gopls (gated behind
+// LSPMANAGER_INTEGRATION=1 by its callers) into an isolated cache dir,
+// writes source to a fresh main.go in a temp module, opens it through a
+// real Editor, and waits for the server to come up — the common setup
+// every real-gopls end-to-end test in this file shares.
+func setupRealGoplsEditor(t *testing.T, source string) (e *Editor, mainGoPath string) {
+	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain on PATH")
+	}
+	isolateLSPCacheDir(t)
+
+	serversDir, err := platform.LSPServersDir()
+	if err != nil {
+		t.Fatalf("platform.LSPServersDir() error = %v", err)
+	}
+	entry, _ := lspmanager.EntryFor(types.LanguageGo)
+	specs, err := lspmanager.LoadPackages(t.TempDir(), map[string]bool{"gopls": true}, time.Hour, nil)
+	if err != nil {
+		t.Fatalf("LoadPackages() error = %v", err)
+	}
+	installed, err := lspmanager.Install(serversDir, specs["gopls"], entry, nil)
+	if err != nil {
+		t.Fatalf("Install(gopls) error = %v", err)
+	}
+	if err := lspmanager.RecordInstalled(serversDir, installed); err != nil {
+		t.Fatalf("RecordInstalled() error = %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module probe\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainGo := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(mainGo, []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ed, err := NewEditorFromFile(mainGo)
+	if err != nil {
+		t.Fatalf("NewEditorFromFile() error = %v", err)
+	}
+	t.Cleanup(func() {
+		ed.mu.Lock()
+		server := ed.lspService.Server
+		ed.mu.Unlock()
+		if server != nil {
+			_ = server.Stop()
+		}
+	})
+
+	waitForLSPReady(t, ed)
+	return ed, mainGo
 }
 
 func waitForLSPReady(t *testing.T, e *Editor) {

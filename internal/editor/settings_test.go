@@ -1,6 +1,9 @@
 package editor
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestLineNumberSettingsDefaultOff(t *testing.T) {
 	e := NewEditor("hello")
@@ -66,5 +69,50 @@ func TestSetWithNoArgumentReturnsError(t *testing.T) {
 	e := NewEditor("hello")
 	if err := e.ExecuteCommand(":set"); err == nil {
 		t.Error("ExecuteCommand(:set) = nil, want an error")
+	}
+}
+
+func TestFormatOnSaveDefaultOff(t *testing.T) {
+	e := NewEditor("hello")
+	if e.FormatOnSave() {
+		t.Error("FormatOnSave() = true by default, want false")
+	}
+}
+
+func TestSetFormatOnSaveTogglesOption(t *testing.T) {
+	e := NewEditor("hello")
+	if err := e.ExecuteCommand(":set formatonsave"); err != nil {
+		t.Fatalf("ExecuteCommand(:set formatonsave) = %v, want nil", err)
+	}
+	if !e.FormatOnSave() {
+		t.Error("FormatOnSave() = false after :set formatonsave, want true")
+	}
+	if err := e.ExecuteCommand(":set noformatonsave"); err != nil {
+		t.Fatalf("ExecuteCommand(:set noformatonsave) = %v, want nil", err)
+	}
+	if e.FormatOnSave() {
+		t.Error("FormatOnSave() = true after :set noformatonsave, want false")
+	}
+}
+
+// TestWriteWithFormatOnSaveButNoServerStillSaves covers executeWriteLocked's
+// fallback: formatonsave is on, but a plain-text buffer has no LSP server
+// at all — the save itself must still happen synchronously and
+// successfully, not block or silently no-op just because there's nothing
+// to format.
+func TestWriteWithFormatOnSaveButNoServerStillSaves(t *testing.T) {
+	tmpFile := t.TempDir() + "/test_file.txt"
+	e := NewEditor("hello")
+	e.ExecuteCommand(":set formatonsave")
+
+	if err := e.ExecuteCommand(":w " + tmpFile); err != nil {
+		t.Fatalf("ExecuteCommand(:w) = %v, want nil", err)
+	}
+	data, err := os.ReadFile(tmpFile)
+	if err != nil {
+		t.Fatalf("reading saved file: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Errorf("saved file content = %q, want %q", data, "hello")
 	}
 }
