@@ -49,6 +49,48 @@ func (e *Editor) IsDirty() bool {
 	return e.table.Dirty
 }
 
+// ClipboardRegister returns this Editor's clipboard register. Exposed so
+// Workspace (T57, 2026-10-18) can adopt the first buffer's own instance as
+// the one shared across every open buffer, rather than each buffer getting
+// its own private registers — real vim registers are never per-buffer.
+func (e *Editor) ClipboardRegister() *clipboardregister.ClipboardRegister {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.clipboardRegister
+}
+
+// SetClipboardRegister overrides this Editor's clipboard register —
+// Workspace calls this on every buffer after the first, handing it the one
+// shared instance adopted via ClipboardRegister above. Must be called
+// before this Editor is reachable by any other goroutine (i.e.
+// immediately after construction, before HandleKey is ever invoked on it)
+// — this is a plain field swap, not something a concurrently-running
+// buffer should ever race against.
+func (e *Editor) SetClipboardRegister(r *clipboardregister.ClipboardRegister) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.clipboardRegister = r
+}
+
+// CommandContext returns this Editor's keyengine parser state. Exposed for
+// the same reason as ClipboardRegister above — Workspace shares one
+// instance across every buffer. Safe to share: a pending verb/modifier/
+// noun sequence can't survive an attempt to do anything else, including a
+// buffer switch — see CommandContext's own doc comment.
+func (e *Editor) CommandContext() *keyengine.CommandContext {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.commandContext
+}
+
+// SetCommandContext overrides this Editor's keyengine parser state — same
+// construction-time-only contract as SetClipboardRegister.
+func (e *Editor) SetCommandContext(cc *keyengine.CommandContext) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.commandContext = cc
+}
+
 // Language returns the buffer's detected language, based on its file
 // path's extension (langdetect.Detect) — LanguagePlainText for an
 // unsaved buffer or an unrecognized extension. Computed fresh each call

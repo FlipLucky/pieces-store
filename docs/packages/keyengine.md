@@ -102,6 +102,34 @@ actual control flow, not assumed — see
 [clipboard-register](clipboard-register.md)'s history for where this came
 up.
 
+## `CommandContext` is workspace-global, not per-buffer (T57, 2026-10-18)
+
+One `*CommandContext` is shared across every open buffer in a
+[Workspace](workspace.md), rather than one per `Editor`. Confirmed safe by
+tracing `ProcessCommand` itself, not assumed: `clearCommandContext()` runs
+on **every** exit path except "this key legitimately continues the
+in-progress sequence" — including the not-whitelisted branch a stray key
+hits mid-sequence (e.g. `:` while an operator like `di` is pending, which
+also means that keystroke doesn't even enter Command mode yet, matching
+real vim's own operator-cancellation behavior) and the resolved-command
+path (`finalizeDirect`/`finalize`). A pending verb/modifier/noun sequence
+structurally cannot survive an attempt to do anything else, buffer
+switches included — there's nothing for sharing one instance to desync.
+
+Needed its own lock first, though: `CommandContext` had no internal
+`sync.Mutex` before this, safe only because it was always reached from
+inside one `Editor`'s own `e.mu`. Shared across `Editor`s with independent
+mutexes, that's the same bug class T16 fixed in
+[piecetable](piecetable.md) — fixed the same way, a `mu sync.Mutex` with
+`SetEditorMode`/`ProcessCommand` each self-locking independently (not as
+one atomic pair — a real, stated boundary: only one buffer is ever live
+and receiving keystrokes at a time, even once splits exist, since input
+stays serialized through whichever pane has focus; worth revisiting only
+if that assumption ever changes). Confirmed as a real race, not by
+inspection: `TestConcurrentSetEditorModeAndProcessCommand` was checked to
+actually produce a `WARNING: DATA RACE` under `go test -race` with the
+lock temporarily reverted, then clean restored.
+
 ## Depends on
 
 `internal/types` only.
@@ -109,7 +137,9 @@ up.
 ## Depended on by
 
 [internal/editor](editor.md) (the only consumer — `keyengine` itself
-never imports `editor`, `offset`, or `piecetable`).
+never imports `editor`, `offset`, or `piecetable`), and, through it,
+[internal/workspace](workspace.md) (owns the one shared `CommandContext`
+instance).
 
 ## See also
 

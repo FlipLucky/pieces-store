@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"github.com/fliplucky/pieces-store/internal/types"
 )
@@ -186,7 +187,21 @@ type ExecutableCommand struct {
 	HasCount bool
 }
 
+// CommandContext is workspace-global as of T57 (2026-10-18) — one shared
+// instance across every open buffer (see internal/workspace), not one per
+// Editor. Safe to share: a pending verb/modifier/noun sequence can never
+// survive an attempt to do anything else, including switching buffers —
+// ProcessCommand calls clearCommandContext on every exit path except "this
+// key legitimately continues the sequence," so by the time any other
+// buffer-affecting action completes, there is no in-progress state left to
+// leak into it. mu guards against the literal data race (two Editors, each
+// with their own separate mutex, both reaching this one shared struct) —
+// SetEditorMode and ProcessCommand each lock independently, not as one
+// atomic pair, since only one buffer is ever live and receiving keystrokes
+// at a time; if that assumption ever changes (true concurrent input into
+// two buffers at once), this would need revisiting.
 type CommandContext struct {
+	mu                  sync.Mutex
 	count               int
 	countStarted        bool
 	registerPending     bool
@@ -206,6 +221,8 @@ type CommandContext struct {
 }
 
 func (cc *CommandContext) SetEditorMode(mode types.Mode) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
 	cc.editorMode = mode
 }
 
@@ -244,6 +261,9 @@ func (cc *CommandContext) modeTables() (verbs, modifiers, nouns map[string]KeyAc
 // check but no modifier/noun table actually defines it — a real bug in the
 // tables, not user input, and should not be treated the same as a fizzle.
 func (cc *CommandContext) ProcessCommand(keyInput string) (*ExecutableCommand, error) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+
 	// 0. A register letter pending from a "{letter} prefix is a bounded,
 	// one-keystroke literal capture — same shape as Replace/FindChar's
 	// second keystroke in dispatch.go, just resolved entirely inside the

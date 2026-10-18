@@ -2,6 +2,8 @@ package keyengine
 
 import (
 	"errors"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/fliplucky/pieces-store/internal/types"
@@ -264,4 +266,33 @@ func TestNormalModeEntersVisual(t *testing.T) {
 			t.Errorf("%q in Normal mode = %+v, want Verb=%v", c.key, cmd, c.wantVerb)
 		}
 	}
+}
+
+// TestConcurrentSetEditorModeAndProcessCommand guards the T57 (2026-10-18)
+// sharing change — one CommandContext is now held by every open buffer in
+// a Workspace (internal/workspace), each driven by its own Editor's own
+// call path, so real concurrent access across buffers is now possible
+// where it never was before. Confirmed to actually fail with a real
+// "WARNING: DATA RACE" under `go test -race` before mu was added (checked
+// by temporarily reverting the lock), and clean after — same discipline as
+// clipboard-register's own TestConcurrentStoreAndRead.
+func TestConcurrentSetEditorModeAndProcessCommand(t *testing.T) {
+	cc := CreateCommandContext()
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			mode := types.ModeNormal
+			if i%2 == 0 {
+				mode = types.ModeVisual
+			}
+			cc.SetEditorMode(mode)
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			cc.ProcessCommand(strconv.Itoa(i % 10))
+		}(i)
+	}
+	wg.Wait()
 }

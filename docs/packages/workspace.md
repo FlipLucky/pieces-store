@@ -79,6 +79,49 @@ buffer's own channel instead of the stale one. No library/toolkit support
 needed; found by tracing the actual goroutine shape in both frontends
 before writing the fix.
 
+## Shared vs. per-buffer state (T57, 2026-10-18)
+
+Not everything is one-per-buffer. `Workspace` owns two pieces of state
+shared across every open buffer rather than duplicated per `Editor`:
+
+- **`*clipboardregister.ClipboardRegister`** — real vim registers are
+  never per-buffer; a yank in one buffer must be visible to a paste in
+  another. Sharing this was a real bug fix, not a nice-to-have — before
+  this task, each `Editor` built its own private instance.
+- **`*keyengine.CommandContext`** — the Normal-mode keystroke parser's
+  in-progress state. Safe to share, confirmed by tracing the parser
+  itself: a pending verb/modifier/noun sequence can't survive an attempt
+  to do anything else, including a buffer switch (see
+  [keyengine](keyengine.md)'s own entry on this).
+
+`New` doesn't construct either fresh — it *adopts* whatever the first
+buffer already built for itself (`Editor.ClipboardRegister()`/
+`CommandContext()`), then threads those same two pointers into every
+subsequently-opened buffer via `Editor.SetClipboardRegister`/
+`SetCommandContext`, called immediately after `editor.NewEditorFromFile`
+and before that buffer is reachable from anywhere else.
+
+This surfaced a hazard that had never mattered before: neither shared type
+had its own lock, since each was only ever touched from inside one
+`Editor`'s own `e.mu`. Shared across `Editor`s with independent mutexes,
+that's the same bug class [piecetable](piecetable.md)'s `GetRuneAt`/
+`FindPieceAt` fix (T16) already addressed — both types gained their own
+`sync.Mutex` as part of this task, confirmed under `go test -race`
+(reverted-then-restored, same discipline as T16) rather than assumed safe.
+
+Deliberately *not* shared, and examined before being ruled out: the
+piece table itself. The user's own proposal — pull `Table` into a
+per-buffer struct, keep one shared `Editor`, hot-swap which buffer's data
+is loaded into it — would reopen a real hazard this design avoids for
+free. Every async result in this codebase (LSP hover/completion/
+diagnostics, incremental highlighter updates) is a closure captured
+against one specific `*Editor`; with a shared, hot-swapped `Editor`, a
+slow response landing after a buffer switch would silently write into
+whichever buffer happens to be current by then, not the one it was
+actually for. One `*Editor` per buffer means every async closure only
+ever touches its own Editor's fields, regardless of what
+`Workspace.current` points at elsewhere.
+
 ## Scope cuts, stated not glossed over
 
 - No oil.nvim-style directory-as-buffer file navigator yet — the user's
@@ -94,7 +137,8 @@ before writing the fix.
 ## Depends on
 
 [internal/editor](editor.md), [internal/exmode](small-packages.md),
-`internal/types`.
+[internal/clipboard-register](clipboard-register.md),
+[internal/keyengine](keyengine.md), `internal/types`.
 
 ## Depended on by
 

@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/fliplucky/pieces-store/internal/editor"
@@ -199,6 +200,58 @@ func TestUnknownCommandForwardsToEditor(t *testing.T) {
 	}
 	if ws.LastError() != nil {
 		t.Errorf("Workspace LastError() = %v, want nil (not a Workspace command)", ws.LastError())
+	}
+}
+
+// TestClipboardRegisterSharedAcrossBuffers is the regression test for the
+// real bug this task (T57, 2026-10-18) fixed: before it, every buffer got
+// its own private ClipboardRegister, so a yank in one buffer was silently
+// invisible to a paste in another — wrong against real vim, where
+// registers are never per-buffer.
+func TestClipboardRegisterSharedAcrossBuffers(t *testing.T) {
+	ws := New(editor.NewEditor(""))
+	first := ws.Current()
+	for _, k := range []string{"i", "h", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d", "<Esc>"} {
+		first.HandleKey(k)
+	}
+	first.HandleKey("0") // back to the start of "hello"
+	first.HandleKey("y")
+	first.HandleKey("i")
+	first.HandleKey("w") // yiw — yanks "hello"
+
+	path := tempFile(t, "b.txt", "x")
+	typeCommand(ws, "e "+path)
+	if ws.Current() == first {
+		t.Fatal("expected :e to switch to a new buffer")
+	}
+
+	ws.Current().HandleKey("p")
+	if got := ws.Current().GetText(); !strings.Contains(got, "hello") {
+		t.Errorf("paste in second buffer = %q, want it to contain the first buffer's yanked %q", got, "hello")
+	}
+}
+
+// TestNamedRegisterSharedAcrossBuffers covers the same sharing fix for a
+// named ("a) register specifically, not just the unnamed one above.
+func TestNamedRegisterSharedAcrossBuffers(t *testing.T) {
+	ws := New(editor.NewEditor(""))
+	first := ws.Current()
+	for _, k := range []string{"i", "h", "e", "l", "l", "o", "<Esc>"} {
+		first.HandleKey(k)
+	}
+	first.HandleKey("0")
+	for _, k := range []string{"\"", "a", "y", "i", "w"} {
+		first.HandleKey(k) // "ayiw — yanks "hello" into register a
+	}
+
+	path := tempFile(t, "c.txt", "x")
+	typeCommand(ws, "e "+path)
+
+	for _, k := range []string{"\"", "a", "p"} {
+		ws.Current().HandleKey(k) // "ap — paste from register a
+	}
+	if got := ws.Current().GetText(); !strings.Contains(got, "hello") {
+		t.Errorf("paste from named register in second buffer = %q, want it to contain %q", got, "hello")
 	}
 }
 

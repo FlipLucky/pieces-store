@@ -1603,6 +1603,105 @@ type.
     to-be-saved buffer — identical to Editor's own pre-existing `:e`
     limitation, not a new one introduced here. (L, 🧠)
 
+## 13. Clipboard register + keyengine state made workspace-global (2026-10-18)
+
+- [x] **T57 — share `ClipboardRegister`/`CommandContext` across every open
+  buffer instead of duplicating one per `Editor`.** Surfaced by the user
+  directly questioning T56's "one full Editor per buffer" design
+  ("we might not need a new editor... all it needs is an array of
+  buffers... if we move the piece table as a property of the buffer we
+  need slight reworks on how the executor works") — a real, worthwhile
+  pushback, not just a resource-efficiency nitpick. Working through it
+  surfaced a genuine, confirmed bug: before this task, `ClipboardRegister`
+  was constructed fresh per `Editor`, so a yank in one buffer was silently
+  invisible to a paste in another — wrong against real vim, where
+  registers are never per-buffer.
+  - **The design question that got worked through first, not skipped**:
+    the user's initial framing (pulling `Table` into a per-buffer struct,
+    keeping one shared `Editor`, swapping which buffer's data is loaded
+    into it) was pushed back on and set aside — every async result in this
+    codebase (LSP hover/completion/diagnostics, incremental highlighter
+    updates) is a closure captured against one specific `*Editor`; if
+    `Editor` became a single shared shell with hot-swapped fields, a slow
+    response landing after a buffer switch would silently corrupt whichever
+    buffer is now loaded, with no structural way to notice. Keeping one
+    `*Editor` per buffer (T56's shape) avoids this for free — each
+    Editor's async closures only ever touch that one Editor's own fields,
+    regardless of what `Workspace.current` points at elsewhere.
+  - **What actually earned sharing**: `ClipboardRegister` (real vim
+    registers are global) and `keyengine.CommandContext` (the Normal-mode
+    keystroke parser's in-progress state). The `CommandContext` sharing
+    question got a real trace, not a guess, after the user's own
+    reasoning ("if I press `di`, then switch buffer... but we don't need
+    to clear it manually, because pressing `ctrl-w` [or any way of
+    leaving] clears it anyway"): confirmed in `ProcessCommand`'s actual
+    code that `clearCommandContext()` runs on **every** exit path except
+    "this key legitimately continues the sequence" — including the
+    not-whitelisted branch a `:` keystroke hits while an operator is
+    pending (which also means `:` while `di` is pending doesn't even
+    enter Command mode on that keystroke, matching real vim's own
+    operator-cancellation behavior) and `finalizeDirect`'s own
+    resolved-command path. A pending sequence structurally cannot survive
+    an attempt to switch buffers — sharing one instance is airtight, not
+    "fine in practice."
+  - **Mechanism**: no package-level singleton, no required-constructor-arg
+    DI (which would've meant touching every `NewEditor("")` call site
+    across dozens of test files for zero benefit to them) — a small
+    getter/setter pair added to `Editor`
+    (`ClipboardRegister()`/`SetClipboardRegister`,
+    `CommandContext()`/`SetCommandContext`), same shape as every other
+    `Editor` accessor. `Workspace.New` adopts the first buffer's
+    already-constructed instances (not built fresh in `Workspace`) and
+    threads those same two pointers into every subsequently-opened
+    buffer's `Editor` via the setters, immediately after construction
+    and before that Editor is reachable from anywhere else.
+  - **Both shared types needed their own lock, not just a shared pointer**:
+    neither `ClipboardRegister` nor `CommandContext` had any internal
+    `sync.Mutex` before this — both were only ever safe because every call
+    into them happened from inside one `Editor`'s own `e.mu`. Once shared
+    across `Editor`s with independent `e.mu`s, that's the identical bug
+    class T16 already fixed in `piecetable` (two separate lock domains
+    both touching one unsynchronized shared resource). Fixed the same way:
+    each type gets its own `mu sync.Mutex`, every exported method
+    self-locks, no unexported helper locks. One real reentrancy hazard
+    caught before it shipped: `ClipboardRegister.Paste()` called the
+    *exported* `GetValueFromUnnamedRegister` internally — locking both
+    would've deadlocked on first use (`sync.Mutex` isn't reentrant), same
+    bug class as the `:Format`/`StartFormat` precedent. Fixed by
+    extracting a private, lock-free `getValueFromUnnamedRegister` both
+    call into. `CommandContext.SetEditorMode`/`ProcessCommand` lock
+    independently, not as one atomic pair — stated explicitly in the doc
+    comment as a real, accepted boundary (only one buffer is ever live and
+    receiving keystrokes at a time, even once splits exist, since input
+    stays serialized through whichever pane has focus; if that ever
+    changes, this needs revisiting), the user's own explicit call after
+    being offered the choice to collapse the two calls into one atomic
+    method instead.
+  - **Verified as real races, not just by inspection** — same discipline
+    as T16: `TestConcurrentStoreAndRead`
+    (`clipboard-register_test.go`) and
+    `TestConcurrentSetEditorModeAndProcessCommand` (`keyengine_test.go`)
+    were each confirmed to actually produce a real `WARNING: DATA RACE` /
+    fatal concurrent-map-write under `go test -race` against the lock
+    temporarily reverted, then confirmed clean with the fix restored.
+    `TestClipboardRegisterSharedAcrossBuffers`/
+    `TestNamedRegisterSharedAcrossBuffers` (new, `workspace_test.go`) were
+    likewise confirmed to actually fail against the pre-injection code
+    (paste landing empty) before confirming they pass with the fix — the
+    exact regression this task fixes, caught by the test, not just
+    asserted. Also smoke-tested against the real tagged `tui-local`
+    binary: yank in buffer A, `:e` to buffer B, paste — the yanked text
+    landed correctly.
+  - A real, incidental test fix along the way: `clipboard-register_test.go`'s
+    table-driven `TestAppendToVisualMode` ranged over its cases by value
+    (`for _, c := range cases`), which would copy `ClipboardRegister`'s new
+    mutex on every iteration — `go vet`'s copylocks check rightly flags
+    this. Fixed by indexing (`for i := range cases`, `tc := &cases[i]`)
+    instead, zero behavior change.
+  - `go build`/`vet`/`gofmt`/`test ./...` all clean, plus a full
+    `go test -race ./...` clean, plus both tagged `gui-local`/`tui-local`
+    builds. (M, 🧠)
+
 ## Longer horizon — browse, don't start yet
 
 - **Dot-repeat (`.`) + command-line history (`:` with `<Up>`/`<Down>` or

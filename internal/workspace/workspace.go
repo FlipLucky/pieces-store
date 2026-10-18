@@ -30,8 +30,10 @@ import (
 	"strings"
 	"sync"
 
+	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
 	"github.com/fliplucky/pieces-store/internal/editor"
 	"github.com/fliplucky/pieces-store/internal/exmode"
+	"github.com/fliplucky/pieces-store/internal/keyengine"
 	"github.com/fliplucky/pieces-store/internal/types"
 )
 
@@ -39,22 +41,38 @@ import (
 // own black box: buffers is never exposed directly, only through Current
 // and the commands below, so a frontend never needs to know a Workspace
 // is anything more than "the thing that answers Current() and HandleKey."
+//
+// clipboard/commandContext (T57, 2026-10-18) are the two pieces of state
+// genuinely shared across every open buffer rather than duplicated per
+// Editor — real vim registers are never per-buffer, and a pending
+// verb/modifier/noun sequence can't survive a buffer switch anyway (see
+// CommandContext's own doc comment), so there's nothing to desync by
+// sharing one instance of each. Deliberately adopted from the first
+// buffer rather than constructed fresh here — see New.
 type Workspace struct {
-	mu        sync.Mutex
-	buffers   []*editor.Editor
-	current   int
-	lastErr   error
-	statusMsg string
-	switched  chan struct{}
+	mu             sync.Mutex
+	buffers        []*editor.Editor
+	current        int
+	lastErr        error
+	statusMsg      string
+	switched       chan struct{}
+	clipboard      *clipboardregister.ClipboardRegister
+	commandContext *keyengine.CommandContext
 }
 
 // New creates a Workspace with a single initial buffer already open —
 // the same single-Editor shape cmd/gui/cmd/tui already construct today,
-// just wrapped.
+// just wrapped. The shared clipboard register and keyengine command
+// context aren't built fresh here — they're adopted from whatever initial
+// already constructed for itself, since nothing else exists yet to differ
+// from them; every subsequently-opened buffer (openCommand) gets these
+// same two instances injected instead of building its own.
 func New(initial *editor.Editor) *Workspace {
 	return &Workspace{
-		buffers:  []*editor.Editor{initial},
-		switched: make(chan struct{}, 1),
+		buffers:        []*editor.Editor{initial},
+		switched:       make(chan struct{}, 1),
+		clipboard:      initial.ClipboardRegister(),
+		commandContext: initial.CommandContext(),
 	}
 }
 
@@ -204,6 +222,12 @@ func (w *Workspace) openCommand(args []string) {
 		w.setError(err)
 		return
 	}
+	// Inject the workspace-shared register/parser state before this buffer
+	// is reachable from anywhere else (SetClipboardRegister/SetCommandContext's
+	// own precondition) — replaces whatever private instances
+	// NewEditorFromFile just built for it.
+	ed.SetClipboardRegister(w.clipboard)
+	ed.SetCommandContext(w.commandContext)
 	w.mu.Lock()
 	w.buffers = append(w.buffers, ed)
 	w.current = len(w.buffers) - 1

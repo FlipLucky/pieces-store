@@ -1,5 +1,7 @@
 package clipboardregister
 
+import "sync"
+
 type RegisterType int
 
 // Entry is one stored register value together with whether it came from a
@@ -31,7 +33,15 @@ const (
 	Visual
 )
 
+// ClipboardRegister is workspace-global as of T57 (2026-10-18) — one
+// instance shared by every open buffer (see internal/workspace), not one
+// per Editor — matching real vim's own registers, which are never
+// per-buffer. Every exported method below self-locks via mu; no
+// unexported helper (getRegister, appendToRegister) ever locks, and none
+// should be called except already-locked, same convention as
+// internal/piecetable's own locking invariant.
 type ClipboardRegister struct {
+	mu              sync.Mutex
 	unnamedRegister Register
 	namedRegister   map[rune]Entry
 	yankRegister    Register
@@ -64,6 +74,8 @@ func (c *ClipboardRegister) StoreRegisterValue(
 	linewise bool,
 	named rune,
 ) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	entry := Entry{Values: []string{value}, Linewise: linewise}
 	appendToRegister(entry, &c.unnamedRegister)
 	if register := c.getRegister(registerType); register != nil {
@@ -87,6 +99,8 @@ func (c *ClipboardRegister) StoreBlockRegisterValue(
 	registerType RegisterType,
 	named rune,
 ) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	entry := Entry{Values: values}
 	appendToRegister(entry, &c.unnamedRegister)
 	if register := c.getRegister(registerType); register != nil {
@@ -113,6 +127,8 @@ func appendToRegister(
 func (c *ClipboardRegister) GetValueFromRegister(
 	registerType RegisterType, index int,
 ) (Entry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	register := c.getRegister(registerType)
 	if register == nil || (index < 0 || index >= len(*register)) {
 		return Entry{}, false
@@ -123,6 +139,16 @@ func (c *ClipboardRegister) GetValueFromRegister(
 func (c *ClipboardRegister) GetValueFromUnnamedRegister(
 	index int,
 ) (Entry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.getValueFromUnnamedRegister(index)
+}
+
+// getValueFromUnnamedRegister is GetValueFromUnnamedRegister's lock-free
+// body — split out so Paste can share it without calling back into an
+// already-locking exported method (sync.Mutex isn't reentrant; that would
+// deadlock on first use).
+func (c *ClipboardRegister) getValueFromUnnamedRegister(index int) (Entry, bool) {
 	if index < 0 || index >= len(c.unnamedRegister) {
 		return Entry{}, false
 	}
@@ -130,7 +156,9 @@ func (c *ClipboardRegister) GetValueFromUnnamedRegister(
 }
 
 func (c *ClipboardRegister) Paste() (Entry, bool) {
-	return c.GetValueFromUnnamedRegister(0)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.getValueFromUnnamedRegister(0)
 }
 
 // GetValueFromNamedRegister looks up a single named register by its
@@ -138,6 +166,8 @@ func (c *ClipboardRegister) Paste() (Entry, bool) {
 // (matches real vim's own a-z registers; this project deliberately
 // skips the uppercase-append convention, lowercase only).
 func (c *ClipboardRegister) GetValueFromNamedRegister(name rune) (Entry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	entry, ok := c.namedRegister[name]
 	return entry, ok
 }
@@ -147,6 +177,8 @@ func (c *ClipboardRegister) GetValueFromNamedRegister(name rune) (Entry, bool) {
 // Unnamed is special-cased since getRegister doesn't resolve it (it's
 // always updated directly, never routed through the splitter).
 func (c *ClipboardRegister) TopEntries(registerType RegisterType, n int) []Entry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var register *Register
 	if registerType == Unnamed {
 		register = &c.unnamedRegister
@@ -165,5 +197,7 @@ func (c *ClipboardRegister) TopEntries(registerType RegisterType, n int) []Entry
 // NamedEntries returns every currently-set named register, keyed by
 // letter — the register overview's read path for the a-z registers.
 func (c *ClipboardRegister) NamedEntries() map[rune]Entry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.namedRegister
 }

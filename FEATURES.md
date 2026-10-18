@@ -108,6 +108,10 @@ to close the last one); `:ls`/`:buffers` lists them all with `%`/`+`
 current/modified markers — the same vocabulary real vim uses for this.
 Splits aren't built yet (see Future below), but every open buffer is a
 fully independent editor underneath, not a shared/swapped single instance.
+Registers are shared across every open buffer, matching real vim — yank
+in one buffer, paste in another, works correctly (fixed 2026-10-18, T57;
+briefly broken immediately after multi-buffer first shipped, since each
+buffer originally got its own private clipboard).
 
 **A real language server installer/manager** (`:LspInstall`/
 `:LspUninstall`/`:LspStatus`, added 2026-09-20), the first half of real LSP

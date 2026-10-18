@@ -1218,6 +1218,64 @@ possible with this shape at all — `Editor` still fuses cursor/viewport
 state to buffer content, so v1 splits will only support different buffers
 side by side, a named future scope cut, not an oversight.
 
+**Clipboard register and keyengine state made workspace-global, same day
+(T57)** — the user directly pushed back on T56's "one full Editor per
+buffer" design as possibly over-duplicating, specifically questioning
+whether the piece table alone needed to be per-buffer while everything
+else (clipboard, "the keyengines") could be shared. Worth stating plainly:
+this pushback surfaced a real, confirmed bug, not just an efficiency
+concern — `ClipboardRegister` was being constructed fresh per `Editor`,
+so a yank in one buffer was silently invisible to a paste in another,
+wrong against real vim (registers are never per-buffer). The user's
+deeper proposal — pull `Table` into a per-buffer struct, keep one shared
+`Editor`, hot-swap which buffer's data is loaded into it — was examined
+and set aside for a concrete reason: every async result in this codebase
+(LSP hover/completion/diagnostics, incremental highlighter updates) is a
+closure captured against one specific `*Editor`; a shared, hot-swapped
+`Editor` would let a slow response land on whichever buffer happens to be
+current by the time it arrives, silently corrupting it. One `*Editor` per
+buffer avoids that for free. What *did* earn sharing: `ClipboardRegister`
+and `keyengine.CommandContext` specifically — the latter confirmed, not
+assumed, via the user's own correct reasoning ("if I press `di` then
+switch buffers... we don't need to clear it manually, because switching
+away clears it anyway") traced against `ProcessCommand`'s real code:
+`clearCommandContext()` fires on every exit path except "this key
+legitimately continues the sequence," so a pending operator structurally
+cannot survive an attempt to leave Normal mode at all, buffer switch
+included.
+
+Mechanism: no singleton, no required-constructor-arg DI (would've meant
+touching every `NewEditor("")` call site across dozens of unrelated
+tests) — a small getter/setter pair on `Editor`
+(`ClipboardRegister()`/`SetClipboardRegister`,
+`CommandContext()`/`SetCommandContext`). `Workspace.New` adopts the first
+buffer's already-built instances rather than constructing new ones, and
+threads those same two pointers into every subsequently-opened buffer via
+the setters. Both shared types needed their own lock first, though —
+neither had one, since each was only ever safe inside one `Editor`'s own
+`e.mu`; sharing them across `Editor`s with independent mutexes is the
+identical bug class T16 already fixed in `piecetable`. Fixed the same way
+(self-locking exported methods, lock-free unexported helpers), catching
+one real reentrancy hazard along the way: `ClipboardRegister.Paste()`
+called the exported `GetValueFromUnnamedRegister` internally, which
+would've deadlocked the instant both locked (same bug class as the
+`:Format`/`StartFormat` precedent) — fixed by extracting a private,
+lock-free helper both share. `CommandContext.SetEditorMode`/
+`ProcessCommand` lock independently rather than as one atomic pair — a
+real, stated boundary (only one buffer is ever live and receiving
+keystrokes at a time) rather than a silently accepted gap, the user's own
+explicit choice after being offered the alternative. Verified as real
+races, not by inspection: both new concurrency tests were confirmed to
+actually produce a `WARNING: DATA RACE`/fatal concurrent-map-write under
+`go test -race` against the fix temporarily reverted, then clean restored
+— and the two new `workspace_test.go` regression tests
+(`TestClipboardRegisterSharedAcrossBuffers`/`TestNamedRegisterSharedAcrossBuffers`)
+were likewise confirmed to fail against the pre-injection code before
+passing with the fix. Also smoke-tested against the real tagged
+`tui-local` binary. `go build`/`vet`/`gofmt`/`test ./...` clean, plus a
+full `go test -race ./...` clean, plus both tagged `gui-local`/`tui-local`
+builds.
+
 ## Module & toolchain
 
 - Module: `github.com/fliplucky/pieces-store`

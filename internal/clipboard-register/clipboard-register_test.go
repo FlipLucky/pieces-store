@@ -2,6 +2,8 @@ package clipboardregister
 
 import (
 	"slices"
+	"strconv"
+	"sync"
 	"testing"
 )
 
@@ -52,14 +54,50 @@ func TestAppendToVisualMode(t *testing.T) {
 			want:         Register{{Values: []string{"fourth"}}, {Values: []string{"third"}}, {Values: []string{"second"}}, {Values: []string{"first"}}},
 		},
 	}
-	for _, c := range cases {
-		for _, value := range c.input {
-			c.initial.StoreRegisterValue(value, c.registerType, false, 0)
+	// Indexed, not ranged-by-value: cases[i] is addressed in place so
+	// ClipboardRegister's mutex (added T57) is never copied — a plain
+	// "for _, c := range cases" would copy the whole case struct,
+	// including the lock, which go vet's copylocks check rightly flags.
+	for i := range cases {
+		tc := &cases[i]
+		for _, value := range tc.input {
+			tc.initial.StoreRegisterValue(value, tc.registerType, false, 0)
 		}
-		register := c.initial.getRegister(c.registerType)
-		if !slices.EqualFunc(c.want, *register, entriesEqual) {
-			t.Errorf("appendTo%v result = %v, want %v", c.registerType, register, c.want)
+		register := tc.initial.getRegister(tc.registerType)
+		if !slices.EqualFunc(tc.want, *register, entriesEqual) {
+			t.Errorf("appendTo%v result = %v, want %v", tc.registerType, register, tc.want)
 		}
 	}
 
+}
+
+// TestConcurrentStoreAndRead guards the T57 (2026-10-18) sharing change —
+// one ClipboardRegister is now held by every open buffer in a Workspace
+// (internal/workspace), each driven by its own Editor's own goroutine-
+// unsafe-by-itself call path, so real concurrent access across buffers is
+// now possible where it never was before. Confirmed to actually fail with
+// a real "WARNING: DATA RACE" under `go test -race` before mu was added
+// (checked by temporarily reverting the lock), and clean after — same
+// discipline as piecetable's own TestConcurrentInsertAndGetRuneAt (T16).
+func TestConcurrentStoreAndRead(t *testing.T) {
+	c := &ClipboardRegister{}
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(3)
+		go func(i int) {
+			defer wg.Done()
+			c.StoreRegisterValue("v"+strconv.Itoa(i), Yank, false, rune('a'+i%26))
+		}(i)
+		go func() {
+			defer wg.Done()
+			c.Paste()
+			c.TopEntries(Yank, 3)
+		}()
+		go func(i int) {
+			defer wg.Done()
+			c.GetValueFromNamedRegister(rune('a' + i%26))
+			c.NamedEntries()
+		}(i)
+	}
+	wg.Wait()
 }

@@ -102,6 +102,36 @@ separator, or the two lines glue together character-for-character. See
 A real, tested guarantee (`TestReplaceDoesNotTouchRegister`), not just an
 omission — real vim's `r` doesn't touch registers either.
 
+## Workspace-global, not per-buffer (T57, 2026-10-18)
+
+One `*ClipboardRegister` is now shared by every open buffer in a
+[Workspace](workspace.md) — real vim registers are never per-buffer, so a
+yank in one buffer must be visible to a paste in another. Before this
+task, each `Editor` built its own private instance, which was a real,
+confirmed bug under multi-buffer (T56), not just an inefficiency: cross-
+buffer yank/paste silently did nothing. `Workspace.New` adopts the first
+buffer's own instance (via `Editor.ClipboardRegister()`) and threads it
+into every subsequently-opened buffer via `Editor.SetClipboardRegister`.
+
+Sharing it exposed a latent gap that had never mattered before: this type
+had **no internal lock at all**, safe only because every call into it used
+to happen from inside one `Editor`'s own `e.mu`. Shared across `Editor`s
+with independent mutexes, that's the identical bug class
+[piecetable](piecetable.md)'s own `GetRuneAt`/`FindPieceAt` fix (T16)
+already addressed — two separate lock domains touching one unsynchronized
+resource. Fixed the same way: a `mu sync.Mutex` field, every exported
+method self-locking, no unexported helper (`getRegister`,
+`appendToRegister`) ever locking. One real reentrancy hazard caught before
+shipping: `Paste()` used to call the *exported* `GetValueFromUnnamedRegister`
+internally — locking both would deadlock on first use, since `sync.Mutex`
+isn't reentrant (the same bug class as the `:Format`/`StartFormat`
+precedent in [editor](editor.md)). Fixed by extracting a private,
+lock-free `getValueFromUnnamedRegister` both now call. Confirmed as a real
+race, not by inspection: `TestConcurrentStoreAndRead` was checked to
+actually produce a `WARNING: DATA RACE`/fatal concurrent-map-write under
+`go test -race` with the lock temporarily reverted, then clean with it
+restored.
+
 ## Depends on
 
 Nothing in this module.
@@ -110,4 +140,5 @@ Nothing in this module.
 
 [interpreter](interpreter.md) (for `RegisterType`, set on
 `DeleteAction`/`YankAction`), [executor](executor.md) (same, plus calling
-`StoreRegisterValue`/`Paste` through `editor.lockedEditorView`).
+`StoreRegisterValue`/`Paste` through `editor.lockedEditorView`),
+[internal/workspace](workspace.md) (owns the one shared instance).
