@@ -6,6 +6,7 @@ import (
 	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
 	"github.com/fliplucky/pieces-store/internal/executor"
 	"github.com/fliplucky/pieces-store/internal/interpreter"
+	"github.com/fliplucky/pieces-store/internal/keyengine"
 	"github.com/fliplucky/pieces-store/internal/offset"
 	"github.com/fliplucky/pieces-store/internal/piecetable"
 	"github.com/fliplucky/pieces-store/internal/types"
@@ -185,7 +186,11 @@ func (e *Editor) handleNormalModeKey(key string) bool {
 		entry, ok = e.clipboardRegister.Paste()
 	}
 	clip.Value, clip.Linewise, clip.Ok = entry.Value, entry.Linewise, ok
-	actions := interpreter.ProcessNormal(cmd, e.table, pos, clip)
+	bracket := interpreter.BracketContext{}
+	if cmd.Noun == keyengine.BracketMatch {
+		bracket.Skip = e.bracketMatchSkipLocked(pos.ByteOffset)
+	}
+	actions := interpreter.ProcessNormal(cmd, e.table, pos, clip, bracket)
 	e.dispatchLocked(toExecutorActions(actions)...)
 	e.mu.Unlock()
 	return true

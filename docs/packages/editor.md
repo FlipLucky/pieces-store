@@ -130,6 +130,19 @@ logic out of `Editor` into the type that should own it, per
   synchronous save, unchanged from before. `:wq` deliberately doesn't
   route through this — see its own code comment for why composing the
   quit signal in too is real, deferred work, not an oversight.
+- `bracket.go`'s `bracketMatchSkipLocked` (T44, 2026-10-18) — builds the
+  skip predicate `%` needs to tell a real bracket apart from one inside a
+  string/comment: real `StyleString`/`StyleComment` spans from
+  [internal/syntax](syntax.md)'s highlighter, bounded to a fixed
+  ±20,000-byte window around the cursor rather than the whole document —
+  calling `Highlighter.Spans` unbounded would reintroduce the exact
+  O(n)-per-keystroke problem the 2026-09-21 scrolling-performance fix
+  exists to prevent. A match genuinely farther away falls back to plain,
+  unstyled depth-counting beyond the window — an honest documented
+  boundary, not a silent wrong answer. Passed into
+  `interpreter.ProcessNormal` as a `BracketContext{Skip}` snapshot, the
+  same pattern `PasteClipboard` already established — `interpreter` itself
+  never touches the highlighter directly.
 - `async.go` — the answer to async orchestration: an `asyncResults`
   channel drained by one dedicated goroutine that takes `e.mu.Lock()`
   around each queued closure. Every async producer (LSP install,

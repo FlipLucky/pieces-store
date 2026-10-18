@@ -68,6 +68,12 @@ const (
 	CharForward
 	LineUp
 	LineDown
+
+	// BracketMatch is `%` (T44) — jump to the bracket matching the one
+	// under the cursor. Deliberately scoped to that one real vim behavior
+	// only: `N%` (jump to N percent of the file, a wholly different
+	// feature sharing the same key) is a non-goal here, not an oversight.
+	BracketMatch
 )
 
 // ErrInconsistentKeymap signals a whitelist/semantic-table mismatch: a key

@@ -936,12 +936,45 @@ quick wins first, the item needing real investigation last:
       `import "strings"` and `strings.ToUpper` in the right places.
       `go build`/`vet`/`gofmt`/`test ./...` all clean, plus both tagged
       `gui-local`/`tui-local` builds. (S/M, 🔧)
-- [ ] **T44 — Smarter `%` bracket matching.** Doesn't exist at all today
-      (confirmed, not assumed). Scoped to a first version that's "smart"
-      only in skipping brackets inside strings/comments — reuses
-      `StyleSpans` we already compute, no new treesitter query needed.
-      Full `vim-matchup`-level scope (tag pairs, `if`/`else`/`end` keyword
-      pairs) is a real stretch goal, not blocking this task. (M, 🔧)
+- [x] **T44 — Smarter `%` bracket matching.** Done 2026-10-18. `%` didn't
+      exist at all before this (confirmed, not assumed) — this is the
+      whole motion's first version, "smart" from the start rather than a
+      dumb version upgraded later. New `offset.MatchBracket` (`bracket.go`)
+      is a pure depth-counting scanner over `offset.Document` — zero
+      dependency on styling, matching the package's existing zero-
+      dependency contract — that takes a `skip func(offset int) bool`
+      predicate so a caller can exclude offsets that shouldn't count as
+      real brackets at all (a `{`/`}` inside a string or comment) without
+      `offset` ever needing to know what a "string" is. Wired as a new
+      `BracketMatch` noun (`keyengine`'s `%` direct action, `Move` verb —
+      the same silent-motion shape `w`/`b`/`e`/`h`/`l` already use) and a
+      new `interpreter.BracketContext{Skip}` snapshot parameter on
+      `ProcessNormal`/`resolveMove`, threaded the same way
+      `PasteClipboard` already is: Editor builds the real predicate once
+      under its own lock (`bracketMatchSkipLocked`, new `editor/bracket.go`)
+      from `StyleString`/`StyleComment` spans and hands it in, so
+      `interpreter` itself never touches `Highlighter`/`StyledSpan`
+      directly. Deliberately bounded to a ±20,000-byte window around the
+      cursor, not the whole document — reusing `Highlighter.Spans`
+      unbounded would reintroduce exactly the O(n)-per-keystroke class of
+      bug the 2026-09-21 scrolling fix exists to prevent; a match farther
+      away than that falls back to plain unstyled depth-counting, an
+      honest documented boundary rather than a silent wrong answer.
+      Deliberate non-goal, matching `f`/`F`'s own precedent of flagging
+      scope rather than silently omitting it: real vim's `N%` (jump to N
+      percent of the file) is a different feature sharing the same key,
+      not implemented here. Verified at both levels: `offset/bracket_test.go`
+      covers the pure scanner (simple pair, nested same/different types,
+      unbalanced, non-bracket position, the skip predicate itself), and
+      `editor/bracket_test.go` drives the real `HandleKey("%")` path,
+      including a real tree-sitter-backed test
+      (`TestBracketMatchSkipsBracketInsideGoString`) that opens an actual
+      `.go` file with a `}` inside a string literal and confirms `%` lands
+      on the real closing brace, not the fake one — no `LSPMANAGER_INTEGRATION`
+      gating needed, since this only exercises `internal/syntax`'s local
+      parse, not a spawned LSP server. `go build`/`vet`/`gofmt`/
+      `test ./...` all clean, plus both tagged `gui-local`/`tui-local`
+      builds. (M, 🔧)
 - [ ] **T48 — Semantic highlighting.** `textDocument/semanticTokens/full`,
       merged into `StyleSpans` with the same precedence pattern
       diagnostics already use (overrides tree-sitter's syntax color at the

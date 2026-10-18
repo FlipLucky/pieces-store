@@ -25,6 +25,15 @@ independent of vim keybindings specifically.
   `ScanUntil` is dead code — an abandoned attempt to simplify/replace
   `FindOffset` that never got finished; not yet decided whether to delete
   it or complete the replacement.
+- `bracket.go` — `MatchBracket` (T44, 2026-10-18), vim's `%`: depth-counts
+  same-type brackets from a starting position to find its match. Takes an
+  optional `skip func(offset int) bool` so a caller can exclude offsets
+  that shouldn't count as real brackets (one sitting inside a string or
+  comment) — `offset` itself stays ignorant of what a "string" even is,
+  the same interface-not-knowledge decoupling the rest of this package
+  uses. See [interpreter](interpreter.md)'s `BracketContext` and
+  [editor](editor.md)'s `bracketMatchSkipLocked` for who actually builds
+  that predicate.
 
 ## Depends on
 

@@ -18,11 +18,14 @@ cycle with `editor` or with [offset](offset.md).
 - `normal_mode.go` — the real, populated tables. A fourth table beyond
   verb/modifier/noun, `availableDirects`, covers keys that execute
   immediately with no further input (`w`/`b`/`e`, `h`/`j`/`k`/`l` +
-  arrows, `u`/`<C-r>`/`r`, `:`/`i`/`o`/`O`, `p`/`P`, `x`). `b`/`e`/`h`/`l`
+  arrows, `u`/`<C-r>`/`r`, `:`/`i`/`o`/`O`, `p`/`P`, `x`, `%` — T44,
+  2026-10-18, the `BracketMatch` noun). `b`/`e`/`h`/`l`
   are also registered as **nouns** (2026-10-11, T22) — reachable bare
   after a verb with no modifier (`dw`/`db`/`de`/`dh`/`dl`, a "short
   delete," see [interpreter](interpreter.md)) — alongside their existing
-  Move-only direct entries.
+  Move-only direct entries. `%` is bare-only, deliberately not composable
+  with an operator yet (`d%` isn't wired) — same documented scope limit
+  `f`/`F` already carry.
 - `visual_mode.go` — placeholder scaffolding only; no Visual keybinding is
   implemented yet.
 

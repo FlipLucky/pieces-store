@@ -47,6 +47,19 @@ type PasteClipboard struct {
 	Ok       bool
 }
 
+// BracketContext is a read-only snapshot used only by `%` (BracketMatch,
+// T44) — the same snapshot pattern as PasteClipboard: Processor never
+// touches internal/syntax's Highlighter or viewmanager.StyledSpan
+// directly, Editor computes Skip once under the same lock as everything
+// else (bounded to a window around the cursor, not the whole document —
+// see Editor's own doc comment on this) and passes it in. Skip reports
+// whether an offset is inside a string/comment and so shouldn't count as
+// a real bracket; nil means "no style information available, count every
+// bracket literally."
+type BracketContext struct {
+	Skip func(offset int) bool
+}
+
 // Action is Normal mode's Processor output: a fully resolved, self-
 // describing unit of work — mode-blind, since mode has already done its
 // job interpreting the sequence by the time one of these exists. Declared
@@ -206,7 +219,7 @@ func ResolveFindChar(doc offset.Document, at Position, target rune, forward bool
 // Returns nil only for a Verb this function doesn't know about,
 // which shouldn't happen for anything keyengine's own whitelist tables
 // actually produce.
-func ProcessNormal(cmd *keyengine.ExecutableCommand, doc offset.Document, at Position, clip PasteClipboard) []Action {
+func ProcessNormal(cmd *keyengine.ExecutableCommand, doc offset.Document, at Position, clip PasteClipboard, bracket BracketContext) []Action {
 	count := cmd.Count
 	if count < 1 {
 		count = 1
@@ -214,7 +227,7 @@ func ProcessNormal(cmd *keyengine.ExecutableCommand, doc offset.Document, at Pos
 
 	switch cmd.Verb {
 	case keyengine.Move:
-		return one(resolveMove(doc, cmd.Noun, at, count))
+		return one(resolveMove(doc, cmd.Noun, at, count, bracket))
 	case keyengine.Delete:
 		rng, ok := resolveRange(doc, cmd.Modifier, cmd.Noun, at.ByteOffset, count)
 		linewise := cmd.Noun == keyengine.LineMotion
@@ -320,12 +333,18 @@ func one(a Action) []Action { return []Action{a} }
 // resolveMotion accumulation loop entirely, mirroring how
 // executeMove/moveCursorUpLocked/moveCursorDownLocked used to split this
 // same way inside internal/editor.
-func resolveMove(doc offset.Document, noun keyengine.KeyActionName, at Position, count int) MoveAction {
+func resolveMove(doc offset.Document, noun keyengine.KeyActionName, at Position, count int, bracket BracketContext) MoveAction {
 	switch noun {
 	case keyengine.LineUp:
 		return resolveLineStep(doc, at, count, -1)
 	case keyengine.LineDown:
 		return resolveLineStep(doc, at, count, 1)
+	case keyengine.BracketMatch:
+		// No count semantics beyond "do it once" — real vim's `N%` is a
+		// different feature (jump to N percent of the file), a deliberate
+		// non-goal here (see BracketMatch's own doc comment in keyengine).
+		target, ok := offset.MatchBracket(doc, at.ByteOffset, bracket.Skip)
+		return MoveAction{Target: target, Ok: ok}
 	}
 
 	target := at.ByteOffset

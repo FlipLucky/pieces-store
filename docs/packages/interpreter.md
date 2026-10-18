@@ -9,11 +9,11 @@ other.
 
 ## Layout
 
-- `normal.go` — `ProcessNormal(cmd, doc, at Position, clip PasteClipboard)
-  []Action`. Resolution only: never mutates anything, never touches
-  `*editor.Editor`. `resolveMotion`/`resolveRange`/`resolveLineStep` are
-  pure functions of `offset.Document`, relocated near-verbatim from the
-  old `dispatch.go`.
+- `normal.go` — `ProcessNormal(cmd, doc, at Position, clip PasteClipboard,
+  bracket BracketContext) []Action`. Resolution only: never mutates
+  anything, never touches `*editor.Editor`. `resolveMotion`/`resolveRange`/
+  `resolveLineStep` are pure functions of `offset.Document`, relocated
+  near-verbatim from the old `dispatch.go`.
 
 ## Text construct vs. short delete (T22, 2026-10-11)
 
@@ -53,11 +53,14 @@ handling already follows.
 
 `ProcessNormal`/`ProcessInsert` never read live `Editor` state — they take
 value snapshots instead: `Position{ByteOffset, Row, Col}`,
-`RuneContext{Before, After rune}`, `PasteClipboard{Value, Linewise, Ok}`.
-`Editor` reads these once under its lock and passes them in by value. This
-is what makes resolution safe to reason about as a pure function, and
-what lets `Editor` hold one lock across resolve-then-apply instead of two
-separately-locked steps.
+`RuneContext{Before, After rune}`, `PasteClipboard{Value, Linewise, Ok}`,
+`BracketContext{Skip}` (T44, 2026-10-18 — a predicate `%`'s `resolveMove`
+passes straight through to `offset.MatchBracket`, letting it exclude a
+bracket sitting inside a string/comment without `interpreter` itself ever
+touching `Highlighter`/`StyledSpan`). `Editor` reads these once under its
+lock and passes them in by value. This is what makes resolution safe to
+reason about as a pure function, and what lets `Editor` hold one lock
+across resolve-then-apply instead of two separately-locked steps.
 
 ## `[]Action`, not `Action`
 

@@ -80,5 +80,6 @@ func CreateNormalModeDirects() map[string]DirectAction {
 		"f":       {Verb: FindCharForward},
 		"F":       {Verb: FindCharBackward},
 		"x":       {Verb: Delete, Noun: CharForward},
+		"%":       {Verb: Move, Noun: BracketMatch},
 	}
 }
