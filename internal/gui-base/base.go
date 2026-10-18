@@ -120,6 +120,7 @@ func (g *GioApp) Run() {
 					gutterWidth = viewmanager.GutterWidth(slice.StartRow + len(slice.Lines) - 1)
 				}
 
+				cursorPx := &cursorPixel{}
 				layout.Stack{}.Layout(gtx,
 					layout.Expanded(func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{
@@ -127,7 +128,7 @@ func (g *GioApp) Run() {
 							Alignment: layout.Start,
 						}.Layout(gtx,
 							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-								return renderBody(gtx, g.theme, slice, spans, diagnostics, substitutePreview, cursor, showNumber, relative, gutterWidth)
+								return renderBody(gtx, g.theme, slice, spans, diagnostics, substitutePreview, cursor, showNumber, relative, gutterWidth, cursorPx)
 							}),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								return renderCompletionPopup(gtx, g.theme, cursor)
@@ -141,7 +142,11 @@ func (g *GioApp) Run() {
 						)
 					}),
 					layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-						return renderHoverPopup(gtx, g.theme, cursor, g.topRow, gutterWidth)
+						// cursorPx is only ever populated by the first
+						// Expanded child above — layout.Stack lays out its
+						// children in order, synchronously, so by the time
+						// this one runs renderBody has already set it.
+						return renderHoverPopup(gtx, g.theme, cursor, g.topRow, gutterWidth, cursorPx)
 					}),
 				)
 
@@ -284,14 +289,40 @@ func followCursor(topRow, cursorRow, visibleRows int) int {
 
 // renderBody lays out exactly the lines in slice — never the whole
 // document — one Flex row per line.
-func renderBody(gtx layout.Context, theme *material.Theme, slice viewmanager.Slice, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, substitutePreview []offset.TextRange, cursor editor.Cursor, showNumber, relative bool, gutterWidth int) layout.Dimensions {
+// cursorPixel is the cursor cell's real, laid-out pixel position (T50) —
+// filled in as renderBody/renderLine/renderStyledRunes actually lay out
+// the cursor's own line and rune, not estimated from font metrics. Found
+// is false until the cursor's rune has actually been laid out; it can stay
+// false for a cursor sitting past the window's right edge (no horizontal
+// scrolling exists yet — see renderStyledRunes — so layout.List simply
+// never calls back for a rune that far off-screen), in which case
+// renderHoverPopup falls back to the old font-metric estimate rather than
+// anchoring on a zero value.
+type cursorPixel struct {
+	X, Y, Height int
+	Found        bool
+}
+
+func renderBody(gtx layout.Context, theme *material.Theme, slice viewmanager.Slice, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, substitutePreview []offset.TextRange, cursor editor.Cursor, showNumber, relative bool, gutterWidth int, cursorPx *cursorPixel) layout.Dimensions {
 	children := make([]layout.FlexChild, len(slice.Lines))
+	accumY := 0
 	for i, line := range slice.Lines {
 		absRow := slice.StartRow + i
 		line := line
 		lineStart := slice.LineOffsets[i]
 		children[i] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return renderLine(gtx, theme, line, absRow, lineStart, spans, diagnostics, substitutePreview, cursor, showNumber, relative, gutterWidth)
+			// lineTopY is this line's real cumulative top-edge offset —
+			// the sum of every preceding line's own already-measured
+			// height, not an estimate — captured at call time since
+			// layout.Flex invokes each Rigid child in order, synchronously.
+			lineTopY := accumY
+			dims := renderLine(gtx, theme, line, absRow, lineStart, spans, diagnostics, substitutePreview, cursor, showNumber, relative, gutterWidth, cursorPx)
+			if absRow == cursor.Row && cursorPx != nil {
+				cursorPx.Y = lineTopY
+				cursorPx.Height = dims.Size.Y
+			}
+			accumY += dims.Size.Y
+			return dims
 		})
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
@@ -315,11 +346,17 @@ func virtualDiagnosticText(message string) string {
 	return "  // " + message
 }
 
-func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow, lineStart int, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, substitutePreview []offset.TextRange, cursor editor.Cursor, showNumber, relative bool, gutterWidth int) layout.Dimensions {
+func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow, lineStart int, spans []viewmanager.StyledSpan, diagnostics []viewmanager.DiagnosticSpan, substitutePreview []offset.TextRange, cursor editor.Cursor, showNumber, relative bool, gutterWidth int, cursorPx *cursorPixel) layout.Dimensions {
 	isCursorLine := absRow == cursor.Row
 	lineSpans := viewmanager.SpansForRange(spans, lineStart, lineStart+len(line))
 	lineDiagnostics := viewmanager.DiagnosticSpansForRange(diagnostics, lineStart, lineStart+len(line))
 	linePreview := viewmanager.SubstitutePreviewRangesForRange(substitutePreview, lineStart, lineStart+len(line))
+
+	// xStart is the gutter's own real pixel width, if any — written by the
+	// gutter's Rigid child below once it actually lays out (0 otherwise).
+	// lineContent's closure reads it at invocation time, which Flex
+	// guarantees happens after the gutter's own child has already run.
+	xStart := new(int)
 
 	var lineContent layout.Widget
 	switch {
@@ -330,7 +367,7 @@ func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow, 
 			return lbl.Layout(gtx)
 		}
 	default:
-		lineContent = renderStyledRunes(theme, line, lineStart, lineSpans, lineDiagnostics, linePreview, isCursorLine, cursor)
+		lineContent = renderStyledRunes(theme, line, lineStart, lineSpans, lineDiagnostics, linePreview, isCursorLine, cursor, xStart, cursorPx)
 	}
 
 	message, hasMessage := viewmanager.DiagnosticMessageForRange(lineDiagnostics, lineStart, lineStart+len(line))
@@ -342,7 +379,9 @@ func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow, 
 			lbl := material.Label(theme, theme.TextSize, gutterText)
 			lbl.Font.Typeface = "monospace"
 			lbl.Color = color.NRGBA{R: 0x56, G: 0x5f, B: 0x89, A: 0xff} // same muted color as StyleComment
-			return lbl.Layout(gtx)
+			dims := lbl.Layout(gtx)
+			*xStart = dims.Size.X
+			return dims
 		}))
 	}
 	children = append(children, layout.Rigid(lineContent))
@@ -364,7 +403,13 @@ func renderLine(gtx layout.Context, theme *material.Theme, line string, absRow, 
 // spans, has diagnostics, has a live :s/:%s preview match, or any
 // combination; a plain line takes the cheaper single-Label path in
 // renderLine instead.
-func renderStyledRunes(theme *material.Theme, line string, lineStart int, lineSpans []viewmanager.StyledSpan, lineDiagnostics []viewmanager.DiagnosticSpan, linePreview []offset.TextRange, isCursorLine bool, cursor editor.Cursor) layout.Widget {
+// xStart is the real pixel x-offset lineContent starts at within its line
+// (the gutter's own already-measured width, or 0 with no gutter) — read
+// when the returned Widget is actually invoked, not when it's constructed
+// (see renderLine's own xStart comment for why that ordering matters).
+// cursorPx, if non-nil, gets the cursor rune's own real x set here — the
+// T50 replacement for guessing it from charWidthPx*col.
+func renderStyledRunes(theme *material.Theme, line string, lineStart int, lineSpans []viewmanager.StyledSpan, lineDiagnostics []viewmanager.DiagnosticSpan, linePreview []offset.TextRange, isCursorLine bool, cursor editor.Cursor, xStart *int, cursorPx *cursorPixel) layout.Widget {
 	runes := []rune(line)
 	count := len(runes)
 	if isCursorLine && cursor.Col >= count {
@@ -384,7 +429,21 @@ func renderStyledRunes(theme *material.Theme, line string, lineStart int, lineSp
 	return func(gtx layout.Context) layout.Dimensions {
 		var charList layout.List
 		charList.Axis = layout.Horizontal
+		accumX := 0
+		if xStart != nil {
+			accumX = *xStart
+		}
 		return charList.Layout(gtx, count, func(gtx layout.Context, charIndex int) layout.Dimensions {
+			// accumX is this cell's real left-edge x — the running sum of
+			// every preceding, already-measured cell's own width (plus
+			// xStart). layout.List calls back in ascending charIndex order
+			// for every cell it actually lays out, so this is exact, not
+			// an estimate — the T50 replacement for charWidthPx*col.
+			if isCursorLine && charIndex == cursor.Col && cursorPx != nil {
+				cursorPx.X = accumX
+				cursorPx.Found = true
+			}
+
 			var charStr string
 			if charIndex < len(runes) {
 				charStr = string(runes[charIndex])
@@ -397,22 +456,25 @@ func renderStyledRunes(theme *material.Theme, line string, lineStart int, lineSp
 				diagStyle = viewmanager.DiagnosticStyleAt(lineDiagnostics, lineStart+byteOffsets[charIndex])
 			}
 
+			var dims layout.Dimensions
 			if isCursorLine && charIndex == cursor.Col {
-				return renderCursorCell(gtx, theme, charStr, cursor.Mode, diagStyle)
-			}
-
-			style := types.StyleNone
-			if charIndex < len(runes) {
-				style = viewmanager.StyleAt(lineSpans, lineStart+byteOffsets[charIndex])
-			}
-			highlighted := charIndex < len(runes) && viewmanager.SubstitutePreviewContains(linePreview, lineStart+byteOffsets[charIndex])
-			return withSubstitutePreviewHighlight(gtx, highlighted, func(gtx layout.Context) layout.Dimensions {
-				return withDiagnosticUnderline(gtx, theme, diagStyle, func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Label(theme, theme.TextSize, charStr)
-					lbl.Color = styleColor(theme, style)
-					return lbl.Layout(gtx)
+				dims = renderCursorCell(gtx, theme, charStr, cursor.Mode, diagStyle)
+			} else {
+				style := types.StyleNone
+				if charIndex < len(runes) {
+					style = viewmanager.StyleAt(lineSpans, lineStart+byteOffsets[charIndex])
+				}
+				highlighted := charIndex < len(runes) && viewmanager.SubstitutePreviewContains(linePreview, lineStart+byteOffsets[charIndex])
+				dims = withSubstitutePreviewHighlight(gtx, highlighted, func(gtx layout.Context) layout.Dimensions {
+					return withDiagnosticUnderline(gtx, theme, diagStyle, func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Label(theme, theme.TextSize, charStr)
+						lbl.Color = styleColor(theme, style)
+						return lbl.Layout(gtx)
+					})
 				})
-			})
+			}
+			accumX += dims.Size.X
+			return dims
 		})
 	}
 }
@@ -719,24 +781,20 @@ func wrapText(text string, width int) []string {
 
 // renderHoverPopup draws the cursor-anchored LSP hover/autocomplete popup.
 //
-// Honest limitation, not glossed over: Gio's immediate-mode rendering here
-// (renderBody's per-rune layout.List) never computes or stores a real
-// pixel position for the cursor — only byte offsets, since Gio's own
-// layout engine places each rune during the render pass rather than this
-// code tracking coordinates itself. Real pixel-exact popup positioning
-// would need recording the cursor cell's own layout op and reading its
-// transform back — not done anywhere in this codebase today. This
-// approximates position instead from cursor.Row/Col and font-size-derived
-// cell dimensions (charWidthPx/lineHeightPx — the same approximation
-// followCursor's scroll math already relies on), which is reasonable but
-// not pixel-perfect, especially for a genuinely proportional font where
-// character widths vary. Worth revisiting with real op-recording if this
-// proves visually off enough to matter in daily use — flagged honestly
-// rather than claimed as exact.
-//
-// gutterWidth (0 when the line-number gutter is off) shifts x by the same
-// number of character-widths the gutter itself occupies in renderLine.
-func renderHoverPopup(gtx layout.Context, theme *material.Theme, cursor editor.Cursor, topRow, gutterWidth int) layout.Dimensions {
+// Pixel-exact as of T50 (2026-10-18), not approximated: cursorPx is
+// renderBody's own real, laid-out cursor position — the running sum of
+// every preceding line's actual height and every preceding rune's actual
+// width on the cursor's own line, captured as those cells were genuinely
+// laid out this frame (see renderBody/renderLine/renderStyledRunes), not
+// guessed from a font-metric constant. Falls back to the old
+// charWidthPx/lineHeightPx estimate only when cursorPx.Found is false — a
+// real, narrow gap: the cursor sitting past the window's right edge, where
+// no horizontal scrolling exists yet so layout.List never calls back for
+// that rune at all. gutterWidth (0 when the line-number gutter is off) is
+// only used by that fallback path; the real-position path already has the
+// gutter's own measured width baked into cursorPx.X via renderLine's
+// xStart.
+func renderHoverPopup(gtx layout.Context, theme *material.Theme, cursor editor.Cursor, topRow, gutterWidth int, cursorPx *cursorPixel) layout.Dimensions {
 	var lines []string
 	selected := -1
 
@@ -766,12 +824,22 @@ func renderHoverPopup(gtx layout.Context, theme *material.Theme, cursor editor.C
 
 	lineHeight := lineHeightPx(gtx, theme)
 	charWidth := charWidthPx(gtx, theme)
-	x := (gutterWidth + cursor.Col) * charWidth
-	y := (cursor.Row - topRow + 1) * lineHeight // one line below the cursor's own row
+
+	var cursorTop, cellHeight, x int
+	if cursorPx != nil && cursorPx.Found {
+		cursorTop = cursorPx.Y
+		cellHeight = cursorPx.Height
+		x = cursorPx.X
+	} else {
+		cursorTop = (cursor.Row - topRow) * lineHeight
+		cellHeight = lineHeight
+		x = (gutterWidth + cursor.Col) * charWidth
+	}
+	y := cursorTop + cellHeight // one line below the cursor's own row
 
 	popupHeight := lineHeight * len(lines)
 	if y+popupHeight > gtx.Constraints.Max.Y {
-		y = (cursor.Row-topRow)*lineHeight - popupHeight // not enough room below — show above instead
+		y = cursorTop - popupHeight // not enough room below — show above instead
 		if y < 0 {
 			y = 0
 		}

@@ -38,9 +38,27 @@ frontends, so this is real duplicated work, not a one-package change:
 diagnostic virtual-text are both absent). The gutter shifts where column 0
 of the cursor's own text starts on screen, so both frontends' cursor/popup
 column math had to account for it: `tui-base`'s `cursorScreenCol` (feeding
-the native-cursor positioning above) and both frontends'
-`renderHoverPopup` `x` calculation each gained `+ gutterWidth` (character
-count in `tui-base`, `gutterWidth * charWidth` pixels in `gui-base`).
+the native-cursor positioning above) gained `+ gutterWidth` (a character
+count); `gui-base`'s `renderHoverPopup` `x` now comes from the gutter's own
+real measured pixel width baked into `cursorPx.X` (see T50 below), not a
+`gutterWidth * charWidth` estimate.
+
+`gui-base`'s hover/completion popup position is **pixel-exact as of T50**
+(2026-10-18), not estimated: `cursorPixel{X, Y, Height, Found}` is threaded
+through `renderBody`→`renderLine`→`renderStyledRunes`, each level
+accumulating the *real* `Dimensions` Gio's own layout already returned
+(every preceding line's actual height, every preceding rune's actual
+width) rather than guessing from `charWidthPx`/`lineHeightPx` — Gio has no
+API to query a drawn element's position after the fact (push-only, nothing
+to introspect), so "real position" here means tracking it as cells are
+genuinely laid out, not reading an op's transform back. Those two
+font-metric constants still exist as a documented fallback for the one
+real gap this leaves: a cursor sitting past the window's right edge, where
+`layout.List` never calls back for that far-off-screen rune at all (no
+horizontal scrolling exists yet) — also the one case where the cursor
+itself isn't visible anyway. `tui-base` needed no equivalent change: its
+`editorView.GetInnerRect()` + cursor-row/col math was already exact real
+terminal-cell coordinates, never an estimate.
 
 ## Gio-specific gotchas (gui-base)
 

@@ -1100,13 +1100,43 @@ quick wins first, the item needing real investigation last:
       given the real scope, or defer it** — not proceeding to
       implementation without that, per this task's own original gate.
       (L, 🧠 — scope confirmed bigger; awaiting go/no-go)
-- [ ] **T50 — GUI popup pixel-exact positioning.** Real op-recording for a
-      rune's actual screen position (capturing the layout op during
-      `renderStyledRunes`' per-rune pass and reading its transform back),
-      replacing today's font-metric estimate
-      (`charWidthPx`/`lineHeightPx`). Self-contained Gio investigation,
-      independent of everything else in this batch — can slot in whenever
-      convenient. (M, 🧠)
+- [x] **T50 — GUI popup pixel-exact positioning.** Done 2026-10-18. Gio has
+      no API to query "where did this already-drawn thing actually land" —
+      it's push-only/stack-based, nothing to introspect after the fact —
+      so "real op-recording" turned out to mean tracking real position
+      ourselves as each cell is genuinely laid out, not reading an op's
+      transform back. New `cursorPixel{X, Y, Height, Found}` threaded
+      through `renderBody`→`renderLine`→`renderStyledRunes`: `renderBody`
+      accumulates each line's own already-returned `Dimensions.Size.Y` as
+      it lays out every line in the viewport, capturing the cursor line's
+      real top-edge Y and height (not `lineHeightPx`'s estimate);
+      `renderLine` captures the gutter's own real measured pixel width
+      (not `gutterWidth*charWidthPx`) via a pointer (`xStart`) read by
+      `renderStyledRunes`'s returned widget at invocation time, which Flex
+      guarantees runs after the gutter's own child already has; `renderStyledRunes`
+      accumulates each rune's own real `Dimensions.Size.X` as
+      `layout.List` lays out each cell, capturing the cursor rune's exact
+      left edge. All three numbers are genuinely measured, not estimated —
+      the font-size-derived `charWidthPx`/`lineHeightPx` constants are
+      gone from the actual positioning path entirely, kept only as a
+      fallback.
+
+      That fallback is real and documented, not a loose end: `cursorPx.Found`
+      stays false when the cursor sits past the window's right edge, since
+      no horizontal scrolling exists yet and `layout.List` simply never
+      calls back for a rune that far off-screen — `renderHoverPopup` falls
+      back to the old estimate in exactly that case, which is also the one
+      case where the cursor itself isn't visible on screen anyway, so
+      pixel-exactness wouldn't be observable even if computed.
+
+      Verified via `go build`/`vet`/`gofmt`/`test ./...` (all clean,
+      `wrapText`'s existing pure-logic tests unaffected) plus both tagged
+      `gui-local`/`tui-local` builds and a smoke-run of the built binary —
+      the same build+vet+smoke-run discipline this codebase has always
+      used for `gui-base` rendering changes, since exercising a live popup
+      needs real keyboard input into a running window this environment
+      can't script; no fake/mocked `layout.Context` test was forced into
+      existence for logic this tightly coupled to Gio's own types. (M, 🧠)
 
 ## 10b. Deferred from this batch
 
