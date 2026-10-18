@@ -32,6 +32,14 @@ when UTF-8 is offered), `sync.go` (`didOpen`/`didChange`/`didClose`/
 call, accepted explicitly ("if you have a 500MB file with a complex LSP
 running, you're doing something wrong").
 
+`CompletionItem` (T49, 2026-10-18) carries `AdditionalTextEdits` alongside
+its own `TextEdit` — how `gopls` (and most servers) express auto-import:
+completing an unimported package member returns the completion's own edit
+plus a second edit inserting the import line elsewhere in the document.
+[editor](editor.md)'s `confirmLSPCompletionLocked` applies both together in
+one pass, not sequentially — see that page for why sequencing them would
+have been a real correctness bug.
+
 ## internal/lspservice
 
 The **session** type — one per buffer language, mirroring

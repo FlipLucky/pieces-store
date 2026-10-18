@@ -102,15 +102,19 @@ type TextEdit struct {
 // CompletionItem is trimmed to the fields pieces-store's own autocomplete
 // UI needs — every field name confirmed against a real gopls completion
 // response, including the fact that it uses TextEdit rather than a plain
-// InsertText for every item observed.
+// InsertText for every item observed. AdditionalTextEdits is how gopls (and
+// most servers) express auto-import: completing an unimported symbol
+// returns the completion's own TextEdit plus a second edit inserting the
+// import line elsewhere in the document, applied together in one pass.
 type CompletionItem struct {
-	Label            string          `json:"label"`
-	Kind             int             `json:"kind"`
-	Detail           string          `json:"detail"`
-	Documentation    json.RawMessage `json:"documentation"`
-	InsertText       string          `json:"insertText"`
-	InsertTextFormat int             `json:"insertTextFormat"`
-	TextEdit         *TextEdit       `json:"textEdit"`
+	Label               string          `json:"label"`
+	Kind                int             `json:"kind"`
+	Detail              string          `json:"detail"`
+	Documentation       json.RawMessage `json:"documentation"`
+	InsertText          string          `json:"insertText"`
+	InsertTextFormat    int             `json:"insertTextFormat"`
+	TextEdit            *TextEdit       `json:"textEdit"`
+	AdditionalTextEdits []TextEdit      `json:"additionalTextEdits"`
 }
 
 // DocumentationText normalizes CompletionItem.Documentation the same way

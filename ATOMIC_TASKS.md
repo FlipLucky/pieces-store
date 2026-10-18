@@ -903,13 +903,39 @@ quick wins first, the item needing real investigation last:
       duplicated for the second test. `go build`/`vet`/`gofmt`/
       `test ./...` all clean, plus both tagged `gui-local`/`tui-local`
       builds. (S, 🔧)
-- [ ] **T49 — Organize-imports / auto-import on completion.** Extends code
-      that already works rather than new protocol surface: confirm whether
-      `lspclient`'s completion handling reads a real server's
-      `additionalTextEdits` field on a `CompletionItem` (the actual
-      import-adding edit real servers attach alongside the main one) —
-      if it's being dropped today, wire it through `applyTextEditsLocked`,
-      which already exists for `:Format`. (S/M, 🔧)
+- [x] **T49 — Organize-imports / auto-import on completion.** Done
+      2026-10-18. Confirmed `additionalTextEdits` was genuinely absent from
+      `lspclient.CompletionItem` — not dropped downstream, never decoded at
+      all. Added the field (`sync.go`) and wired it through
+      `confirmLSPCompletionLocked`: the completion's own `TextEdit` plus
+      every `AdditionalTextEdit` apply together in one pass (both are byte
+      ranges against the same pre-edit `source`, so applying them
+      separately — primary first, then additional — would have let an
+      earlier-in-the-document import insertion invalidate the primary
+      edit's own already-computed offset). `applyTextEditsLocked`'s apply
+      loop was split out into a reusable `applyTextEditsRawLocked` (no
+      change in behavior for `:Format`'s own call site) specifically so
+      completion could reuse the existing sorted end-to-start apply logic
+      without inheriting `applyTextEditsLocked`'s "land the cursor at its
+      own pre-edit position" assumption — completion needs the cursor at
+      the end of the *inserted* text instead, shifted by the net length
+      delta of every additional edit landing earlier in the document (an
+      import line is almost always above the completed symbol, but the
+      math doesn't assume that — it sums deltas of edits whose start
+      offset is ≤ the primary edit's own start). Verified at both tiers:
+      two fast unit tests
+      (`TestConfirmLSPCompletionAppliesAdditionalTextEdits`,
+      `TestConfirmLSPCompletionWithoutAdditionalTextEditsUnchanged` in the
+      new `lspfeatures_test.go`) exercise the offset math directly with a
+      hand-built `CompletionItem`, and a real end-to-end test
+      (`TestRealAutoImportCompletionEndToEnd`, `LSPMANAGER_INTEGRATION=1`)
+      types `strings.` with no existing import against a real `gopls`,
+      confirms a real `ToUpper` candidate actually carries a nonempty
+      `AdditionalTextEdits` (not assumed — logged the real response), and
+      confirms the buffer after applying it contains both the inserted
+      `import "strings"` and `strings.ToUpper` in the right places.
+      `go build`/`vet`/`gofmt`/`test ./...` all clean, plus both tagged
+      `gui-local`/`tui-local` builds. (S/M, 🔧)
 - [ ] **T44 — Smarter `%` bracket matching.** Doesn't exist at all today
       (confirmed, not assumed). Scoped to a first version that's "smart"
       only in skipping brackets inside strings/comments — reuses

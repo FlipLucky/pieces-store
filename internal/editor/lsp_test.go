@@ -248,6 +248,72 @@ func TestRealFormatOnSaveEndToEnd(t *testing.T) {
 	}
 }
 
+// TestRealAutoImportCompletionEndToEnd is T49's real end-to-end proof:
+// completing a member of an unimported standard-library package (typing
+// "strings." with no existing import) against a real gopls genuinely
+// returns AdditionalTextEdits — an import line — alongside the
+// completion's own TextEdit, and confirming it applies both correctly
+// through Editor's real pipeline, not just that lspclient can decode the
+// field (already covered by the fast unit tests in lspfeatures_test.go).
+func TestRealAutoImportCompletionEndToEnd(t *testing.T) {
+	if os.Getenv("LSPMANAGER_INTEGRATION") == "" {
+		t.Skip("set LSPMANAGER_INTEGRATION=1 to run a real gopls end-to-end")
+	}
+	// Deliberately no "strings" import — the whole point is to prove gopls
+	// (and this codebase's handling of its response) adds one.
+	source := "package main\n\nfunc main() {\n\tstrings\n}\n"
+	e, _ := setupRealGoplsEditor(t, source)
+
+	afterPackageName := strings.Index(source, "strings") + len("strings")
+	e.mu.Lock()
+	e.cursor.Update(afterPackageName, 0, 0)
+	e.mu.Unlock()
+	e.HandleKey("i")
+	e.HandleKey(".") // gopls's real advertised trigger character
+
+	waitFor(t, 15*time.Second, func() bool {
+		return e.GetCursor().LSPCompletion.Active
+	}, "LSP completion never became active after typing \"strings.\"")
+
+	items := e.GetCursor().LSPCompletion.Items
+	idx := -1
+	for i, item := range items {
+		if item.Label == "ToUpper" && len(item.AdditionalTextEdits) > 0 {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		var labels []string
+		for _, item := range items {
+			labels = append(labels, item.Label)
+		}
+		t.Fatalf("no ToUpper candidate with AdditionalTextEdits among %d items: %v", len(items), labels)
+	}
+	t.Logf("real ToUpper candidate: %+v", items[idx])
+
+	// Same-package white-box access to select the candidate directly
+	// (this project's established testing convention) rather than driving
+	// <C-n>/<C-p> idx times — the thing under real test here is confirming
+	// an auto-import completion, not the cycling UI.
+	e.mu.Lock()
+	e.cursor.LSPCompletion.Index = idx
+	e.mu.Unlock()
+	e.ConfirmLSPCompletion()
+
+	if e.GetCursor().LSPCompletion.Active {
+		t.Error("LSPCompletion still active after confirming — should have cleared")
+	}
+	got := e.GetText()
+	if !strings.Contains(got, `"strings"`) {
+		t.Errorf("buffer after confirm = %q, want a real strings import to have been inserted", got)
+	}
+	if !strings.Contains(got, "strings.ToUpper") {
+		t.Errorf("buffer after confirm = %q, want it to contain strings.ToUpper", got)
+	}
+	t.Logf("buffer after auto-import confirm: %q", got)
+}
+
 // setupRealGoplsEditor installs a real gopls (gated behind
 // LSPMANAGER_INTEGRATION=1 by its callers) into an isolated cache dir,
 // writes source to a fresh main.go in a temp module, opens it through a

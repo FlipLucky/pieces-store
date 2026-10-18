@@ -140,6 +140,20 @@ logic out of `Editor` into the type that should own it, per
   `moveCursorToLocked` (incremental `didChange`, synchronous, same
   reasoning as the tree-sitter highlighter's own inline `Update` call —
   see [internal/syntax](syntax.md)).
+- `lspfeatures.go`'s `confirmLSPCompletionLocked` (T49, 2026-10-18) —
+  applies a confirmed completion's own `TextEdit` *and* any
+  `AdditionalTextEdits` (gopls's auto-import mechanism — see
+  [the LSP stack](lsp-stack.md)) in one pass, not sequentially: both are
+  byte ranges computed against the same pre-edit source, so applying the
+  primary edit first would risk an earlier-in-the-document import
+  insertion invalidating its already-computed offset. `applyTextEditsLocked`
+  (used by `:Format`) had its apply loop split out into
+  `applyTextEditsRawLocked` so completion could reuse the same sorted
+  end-to-start logic without inheriting its "land the cursor at its own
+  pre-edit position" assumption — completion computes its own target (the
+  end of the inserted text, shifted by the net length delta of any
+  additional edit landing earlier in the document) and calls
+  `finishBufferMutationLocked` directly.
 
 ## Depends on
 

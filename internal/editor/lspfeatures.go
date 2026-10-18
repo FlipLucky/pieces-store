@@ -227,6 +227,18 @@ func (e *Editor) applyTextEditsLocked(edits []lspclient.TextEdit, baseSource []b
 	if len(edits) == 0 {
 		return
 	}
+	e.applyTextEditsRawLocked(edits, baseSource)
+	e.finishBufferMutationLocked(e.cursor.ByteOffset)
+}
+
+// applyTextEditsRawLocked is applyTextEditsLocked's actual apply loop, split
+// out (T49) for confirmLSPCompletionLocked's sake — it needs to apply a
+// batch of edits (a completion's own TextEdit plus any AdditionalTextEdits,
+// e.g. an auto-inserted import line) but land the cursor somewhere other
+// than its own pre-edit position, so it computes that target itself and
+// calls finishBufferMutationLocked directly rather than through here.
+// Caller must already hold e.mu.
+func (e *Editor) applyTextEditsRawLocked(edits []lspclient.TextEdit, baseSource []byte) {
 	sorted := append([]lspclient.TextEdit(nil), edits...)
 	sort.Slice(sorted, func(i, j int) bool {
 		return lspclient.PositionToOffset(baseSource, sorted[i].Range.Start) >
@@ -243,7 +255,6 @@ func (e *Editor) applyTextEditsLocked(edits []lspclient.TextEdit, baseSource []b
 			e.table.Insert(start, []byte(ed.NewText))
 		}
 	}
-	e.finishBufferMutationLocked(e.cursor.ByteOffset)
 }
 
 // ---- Autocomplete ----
@@ -323,7 +334,12 @@ func (e *Editor) cycleLSPCompletionLocked(direction int) {
 // ConfirmLSPCompletion applies the currently-highlighted candidate — a
 // structured TextEdit if the server provided one (confirmed the common
 // case against real gopls output), otherwise plain InsertText (falling
-// back to the item's Label if even that's empty) inserted at the cursor.
+// back to the item's Label if even that's empty) inserted at the cursor —
+// plus any AdditionalTextEdits (T49, 2026-10-18), gopls's mechanism for
+// auto-import: completing an unimported symbol also returns an edit that
+// inserts the import line elsewhere in the document. Both are applied in
+// one pass so an earlier-in-the-document import insertion can never
+// invalidate the primary edit's own offset.
 func (e *Editor) ConfirmLSPCompletion() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -342,26 +358,34 @@ func (e *Editor) confirmLSPCompletionLocked() {
 	item := state.Items[state.Index]
 
 	source := []byte(e.table.CombinePieces())
-	var start, end int
-	var newText string
+	var primary lspclient.TextEdit
 	if item.TextEdit != nil {
-		start = lspclient.PositionToOffset(source, item.TextEdit.Range.Start)
-		end = lspclient.PositionToOffset(source, item.TextEdit.Range.End)
-		newText = item.TextEdit.NewText
+		primary = *item.TextEdit
 	} else {
-		newText = item.InsertText
+		newText := item.InsertText
 		if newText == "" {
 			newText = item.Label
 		}
-		start = e.cursor.ByteOffset
-		end = start
+		pos := lspclient.OffsetToPosition(source, e.cursor.ByteOffset)
+		primary = lspclient.TextEdit{Range: lspclient.Range{Start: pos, End: pos}, NewText: newText}
 	}
 
-	if end > start {
-		e.table.Delete(start, end-start)
+	// The cursor lands at the end of the primary edit's own inserted text,
+	// shifted by the net length delta of every additional edit landing
+	// earlier in the document (an auto-inserted import line, almost always
+	// above the completed symbol) — additional edits never overlap the
+	// primary edit per spec, so "earlier" is unambiguous.
+	primaryStart := lspclient.PositionToOffset(source, primary.Range.Start)
+	newCursor := primaryStart + len(primary.NewText)
+	for _, ed := range item.AdditionalTextEdits {
+		edStart := lspclient.PositionToOffset(source, ed.Range.Start)
+		if edStart <= primaryStart {
+			edEnd := lspclient.PositionToOffset(source, ed.Range.End)
+			newCursor += len(ed.NewText) - (edEnd - edStart)
+		}
 	}
-	if len(newText) > 0 {
-		e.table.Insert(start, []byte(newText))
-	}
-	e.finishBufferMutationLocked(start + len(newText))
+
+	edits := append([]lspclient.TextEdit{primary}, item.AdditionalTextEdits...)
+	e.applyTextEditsRawLocked(edits, source)
+	e.finishBufferMutationLocked(newCursor)
 }
