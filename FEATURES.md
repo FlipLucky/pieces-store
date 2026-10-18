@@ -207,11 +207,6 @@ GUI/TUI parity is real, both front ends route through the same engine.
 Real yank/delete/change/paste, find/replace, and the October UX-polish pass
 (cursor shape, line numbers, command completion) all landed after Stage 1
 closed, so "MVP" undersells what's actually here now — see Present above.
-Still genuinely open from the original MVP scope: smooth editing on a very
-large (500MB-class) file has never been specifically stress-tested, and the
-whole-buffer `CombinePieces()` calls sprinkled through LSP sync/formatting
-are a real, known risk there — worth closing before calling large-file
-performance a settled strength rather than an assumption.
 
 ### Stage 2 (current) — markdown/HTML + treesitter/LSP
 
@@ -380,6 +375,14 @@ they're just not built yet.
   not new backend work.
 - Startup/lazy-load work (grammars/LSP servers loaded only for languages
   actually opened) — anytime, no gate.
+- **Very-large-file (500MB-class) stress testing** — deliberately placed
+  here, not up front with Stage 1: performance has stayed a real priority
+  at every step so far (the O(log n+k) syntax-span fix, viewport-bounded
+  rendering/LSP sync everywhere), so this isn't a known failure to chase
+  down, just an untested assumption worth confirming eventually. The
+  whole-buffer `CombinePieces()` calls sprinkled through LSP sync/
+  formatting are the one concrete thing worth checking first whenever this
+  is picked up.
 
 ### Stage 3 — multi-file/workspace
 
