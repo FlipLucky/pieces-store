@@ -1076,15 +1076,30 @@ quick wins first, the item needing real investigation last:
       `test ./...` all clean, plus both tagged `gui-local`/`tui-local`
       builds. (M, 🧠)
 - [ ] **T43 — Treesitter-powered text objects** (`if`/`af`, `ic`/`ac`,
-      parameter objects). **Needs real investigation before implementation,
-      not just wiring** — same discipline the original syntax-highlighting
-      work used (a from-scratch prototype verifying capture-name coverage
-      before committing, not assumed): does `gotreesitter`'s bundled
-      grammar set actually ship `textobjects.scm`-style queries with
-      `@function.outer`/`@function.inner`-convention captures? If not, this
-      means writing those queries per language — a materially bigger scope
-      than "just wire it up," and worth knowing before starting rather than
-      discovering mid-task. (L, 🧠 — confirm scope first)
+      parameter objects). **Scope investigation done 2026-10-18 — confirmed
+      the bigger-scope case, not the small one.** Read `gotreesitter`
+      v0.53.0's own `grammars` package source directly (`registry.go`):
+      `LangEntry` carries `HighlightQuery` and `TagsQuery` fields, each
+      populated per language — but **no `TextObjectsQuery` field or
+      bundled `textobjects.scm`-convention query exists anywhere in the
+      module** (confirmed by reading the actual struct definition, not
+      just grepping for `.scm` files, which found none at all — the
+      library embeds its query strings as Go string literals, not loose
+      files, so a filename search alone would have been misleading).
+      `gotreesitter.NewQuery(source, lang)` — the same general-purpose
+      tree-sitter query compiler `HighlightQuery`/`TagsQuery` themselves
+      compile through — works against *any* query string, so this is
+      mechanically possible; the gap is purely that nobody has written
+      the actual `@function.outer`/`@function.inner`/`@parameter.inner`-
+      convention queries for any of this project's curated languages.
+      Implementing this for real means pieces-store authoring and
+      maintaining its own per-language text-object query set (at minimum
+      Go, likely TS/JS next) — a genuinely bigger, ongoing-maintenance
+      scope than "wire up an existing query," confirmed rather than
+      assumed. **Awaiting a user decision on whether to take this on now
+      given the real scope, or defer it** — not proceeding to
+      implementation without that, per this task's own original gate.
+      (L, 🧠 — scope confirmed bigger; awaiting go/no-go)
 - [ ] **T50 — GUI popup pixel-exact positioning.** Real op-recording for a
       rune's actual screen position (capturing the layout op during
       `renderStyledRunes`' per-rune pass and reading its transform back),
