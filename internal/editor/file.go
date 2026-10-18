@@ -39,6 +39,16 @@ func (e *Editor) GetFilePath() string {
 	return e.table.FilePath
 }
 
+// IsDirty reports whether the buffer has unsaved changes — the same flag
+// :q's own refusal check already reads internally (executeCommandLocked's
+// "q"/"quit" case), exposed publicly so a caller outside internal/editor
+// (Workspace's :bd safety check) can ask the same question.
+func (e *Editor) IsDirty() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.table.Dirty
+}
+
 // Language returns the buffer's detected language, based on its file
 // path's extension (langdetect.Detect) — LanguagePlainText for an
 // unsaved buffer or an unrecognized extension. Computed fresh each call

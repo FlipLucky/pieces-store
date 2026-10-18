@@ -100,6 +100,15 @@ pipe/bar cursor in Insert mode — the terminal UI drives the terminal's own
 real native cursor for this (not a color-inversion simulation), genuinely
 changing shape rather than approximating it.
 
+**Multiple open buffers** (added 2026-10-18): `:e <path>` opens a new
+buffer or switches to one already open; `:bn`/`:bnext` and `:bp`/`:bprev`
+cycle through them (wrapping around); `:bd`/`:bdelete` closes the current
+one (refusing on unsaved changes unless forced with `:bd!`, and refusing
+to close the last one); `:ls`/`:buffers` lists them all with `%`/`+`
+current/modified markers — the same vocabulary real vim uses for this.
+Splits aren't built yet (see Future below), but every open buffer is a
+fully independent editor underneath, not a shared/swapped single instance.
+
 **A real language server installer/manager** (`:LspInstall`/
 `:LspUninstall`/`:LspStatus`, added 2026-09-20), the first half of real LSP
 support: installs an actual language server for any of the curated
@@ -139,8 +148,12 @@ features above verified against an actual running `gopls`, not simulated.
   (`ATOMIC_TASKS.md`'s T31); macros aren't scoped yet at all. (Registers
   and yank/paste, listed as a gap here previously, shipped 2026-10-11 —
   see Present above.)
-- **Go-to-definition** is a further, separate plan again, since it also
-  needs multi-buffer/workspace support that doesn't exist yet.
+- **Go-to-definition** is a further, separate plan again — multi-buffer
+  support now exists (above), but go-to-definition itself isn't wired up
+  yet.
+- **No splits, no file-navigator UI** — every open buffer today is only
+  reachable via `:e`/`:bn`/`:bp`/`:ls`, no visual buffer list or split
+  panes yet (see Future's Stage 3 section).
 
 ## Past — how it got here
 
@@ -401,29 +414,47 @@ they're just not built yet.
 
 Close to a direct restatement of what "Stage 3" already meant, now with the
 dotfiles research and the old IDE checklist's "Project & workspace
-management" category folded in rather than listed separately:
+management" category folded in rather than listed separately. **The
+buffer core itself shipped 2026-10-18** (`internal/workspace`, see Present
+above) — `:e`/`:bn`/`:bp`/`:bd`/`:ls` all work against real independent
+per-file `Editor`s; everything else in this section is still ahead, in the
+user's own stated sequence (buffers → splits → the file navigator below,
+since buffers are splits' real prerequisite):
 
-- A file tree/project explorer (the `oil.nvim`/`fyler.nvim` shape from the
-  dotfiles research), file create/rename/delete/move from the UI (with LSP
-  `willRenameFiles` reference updates where a server supports it).
-- Tabs for open buffers + splits/panes, vim's own windows/tabs/buffers
-  model (`Ctrl-W` splits, `:tabnew`/`gt`/`gT` — a vim tab is a *layout of
-  splits*, not "one file" the way browser tabs work, worth keeping that
-  distinction rather than copying the browser-tab mental model; `:ls`/
-  `:bnext`/`:bprev`/`Ctrl-^` for the actual buffer list).
+- A file tree/project explorer, deliberately **not** the VS Code–style
+  sidebar-tree shape — the user's explicit want is an `oil.nvim`-style
+  buffer: a directory listing rendered *as a buffer* (lines of text,
+  navigable/editable/renameable by editing the buffer like any other text,
+  not a separate tree-widget rendering primitive) — both for opening a
+  known file and for *navigating* when the destination file isn't known
+  yet, which a flat fuzzy-finder doesn't cover. Fits this codebase's
+  existing "reduce everything to one vocabulary" bent better than a
+  bespoke tree widget would. File create/rename/delete/move from the UI
+  (with LSP `willRenameFiles` reference updates where a server supports
+  it) falls out of this almost for free, the same way real `oil.nvim`
+  works.
+- Splits/panes, vim's own windows model (`Ctrl-W` splits; tabs — a vim tab
+  is a *layout of splits*, not "one file" the way browser tabs work — are
+  a later, separate addition on top, not needed for splits themselves). A
+  known, named scope cut for v1: real vim lets two splits show the *same*
+  buffer with independent cursor/scroll state, which needs cursor/viewport
+  state decoupled from buffer content — `Editor` still fuses the two, so
+  v1 splits will only support *different* buffers side by side.
 - Session/workspace restore (vim's own `:mksession` is the native version
   of this), multi-root workspaces, per-project vs. global settings (a
   `.pieces-store/`-style project-local config layered over global
   preferences — depends on the config-file work above existing first).
 - `mini.pick`-style fuzzy files/grep/buffers UI (dotfiles research) — the
   front-end for the already-planned ripgrep-style workspace search; the
-  buffers picker specifically needs the multi-buffer model to mean
-  anything. File icons (`nvim-web-devicons`) are cosmetic, riding along
-  once a picker/tree exists to decorate.
+  buffers picker specifically is now buildable (the multi-buffer model it
+  needs shipped above) but not built yet. File icons (`nvim-web-devicons`)
+  are cosmetic, riding along once a picker/tree exists to decorate.
 - Go-to-file, project-wide search & replace (scoped search, `.gitignore`-
   aware, safe replace-all with a diff-style preview), workspace-wide symbol
   search (LSP `workspace/symbol`), find references (LSP
-  `textDocument/references`) — all depend on the workspace model existing.
+  `textDocument/references`) — all depend on the broader workspace model
+  (search in particular still needs the planned ripgrep-style subsystem,
+  not just multi-buffer).
 - **Rename symbol** (LSP `textDocument/rename`) and **call/type hierarchy**
   — both genuinely workspace-wide/multi-file by nature, so they land here
   rather than Stage 2 despite otherwise being "just" LSP feature

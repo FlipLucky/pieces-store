@@ -11,6 +11,7 @@ import (
 	"github.com/fliplucky/pieces-store/internal/offset"
 	"github.com/fliplucky/pieces-store/internal/types"
 	"github.com/fliplucky/pieces-store/internal/viewmanager"
+	"github.com/fliplucky/pieces-store/internal/workspace"
 )
 
 // completionWindow bounds candidates to at most maxRows entries, keeping
@@ -191,7 +192,7 @@ func styledLineText(line string, lineStart int, spans []viewmanager.StyledSpan, 
 	return b.String()
 }
 
-func Boot(ed *editor.Editor) error {
+func Boot(ws *workspace.Workspace) error {
 	app := tview.NewApplication()
 
 	// Color Palette definitions
@@ -284,21 +285,22 @@ func Boot(ed *editor.Editor) error {
 
 	// Function to rebuild rendering text with cursor block highlight
 	renderContent := func() {
-		cursor := ed.GetCursor()
-		filePath := ed.GetFilePath()
+		cur := ws.Current()
+		cursor := cur.GetCursor()
+		filePath := cur.GetFilePath()
 		if filePath == "" {
 			filePath = "[No Name]"
 		}
 
 		editorView.SetTitle(fmt.Sprintf(" Pieces Store TUI Editor — %s ", filePath))
 
-		slice := ed.Viewport(cursor.Row, 1, viewportRadius)
-		spans := ed.StyleSpans(slice.StartOffset, slice.EndOffset)
-		diagnosticSpans := ed.DiagnosticSpans(slice.StartOffset, slice.EndOffset)
-		substitutePreview := ed.SubstitutePreviewRanges()
-		substitutePreview = append(substitutePreview, ed.VisualSelectionRanges()...)
+		slice := cur.Viewport(cursor.Row, 1, viewportRadius)
+		spans := cur.StyleSpans(slice.StartOffset, slice.EndOffset)
+		diagnosticSpans := cur.DiagnosticSpans(slice.StartOffset, slice.EndOffset)
+		substitutePreview := cur.SubstitutePreviewRanges()
+		substitutePreview = append(substitutePreview, cur.VisualSelectionRanges()...)
 
-		showNumber, relative := ed.LineNumberSettings()
+		showNumber, relative := cur.LineNumberSettings()
 		gutterWidth := 0
 		if showNumber || relative {
 			gutterWidth = viewmanager.GutterWidth(slice.StartRow + len(slice.Lines) - 1)
@@ -404,13 +406,21 @@ func Boot(ed *editor.Editor) error {
 			// app is about to close. gui-base already does this; this was
 			// a real, user-hit gap — :q being silently refused with zero
 			// feedback looked indistinguishable from :q being broken.
-			if err := ed.GetLastCommandError(); err != nil && err != editor.ErrQuit {
+			if err := cur.GetLastCommandError(); err != nil && err != editor.ErrQuit {
 				statusLine += fmt.Sprintf(" | [#f7768e]%s[white]", err)
 			}
 			// Non-error progress text (e.g. ":LspInstall" in flight or its
 			// result) — a separate slot from the error one above, since
 			// StatusMessage isn't error-shaped.
-			if msg := ed.StatusMessage(); msg != "" {
+			if msg := cur.StatusMessage(); msg != "" {
+				statusLine += fmt.Sprintf(" | %s", msg)
+			}
+			// Workspace-level outcomes (:e/:bnext/:bprev/:bd/:ls) — a
+			// separate slot from the buffer's own, same error/status split.
+			if err := ws.LastError(); err != nil {
+				statusLine += fmt.Sprintf(" | [#f7768e]%s[white]", err)
+			}
+			if msg := ws.StatusMessage(); msg != "" {
 				statusLine += fmt.Sprintf(" | %s", msg)
 			}
 			statusBar.SetText(statusLine)
@@ -420,9 +430,18 @@ func Boot(ed *editor.Editor) error {
 	// Initial render
 	renderContent()
 
-	// Listen for editor updates and request redraws
+	// Listen for editor updates and request redraws. Current().ChangeChan()
+	// is re-fetched on every loop pass (inside the select, which re-reads
+	// it each time the enclosing for loops back around) rather than
+	// captured once — after Switched() fires because the current buffer
+	// changed, the next pass picks up the new buffer's own channel instead
+	// of staying stuck listening to the one that's no longer on screen.
 	go func() {
-		for range ed.ChangeChan() {
+		for {
+			select {
+			case <-ws.Current().ChangeChan():
+			case <-ws.Switched():
+			}
 			app.QueueUpdateDraw(func() {
 				renderContent()
 			})
@@ -463,8 +482,8 @@ func Boot(ed *editor.Editor) error {
 		}
 
 		if keyStr != "" {
-			if ed.HandleKey(keyStr) {
-				if ed.IsQuitRequested() {
+			if ws.HandleKey(keyStr) {
+				if ws.Current().IsQuitRequested() {
 					app.Stop()
 				}
 				return nil

@@ -19,6 +19,7 @@
   - [internal/viewmanager](packages/viewmanager.md)
   - [internal/syntax](packages/syntax.md)
   - [internal/clipboard-register](packages/clipboard-register.md)
+  - [internal/workspace](packages/workspace.md)
   - [LSP stack](packages/lsp-stack.md)
   - [Front ends (gui-base/tui-base)](packages/frontends.md)
   - [platform/](packages/platform.md)

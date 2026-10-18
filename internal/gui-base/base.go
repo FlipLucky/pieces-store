@@ -22,6 +22,7 @@ import (
 	"github.com/fliplucky/pieces-store/internal/offset"
 	"github.com/fliplucky/pieces-store/internal/types"
 	"github.com/fliplucky/pieces-store/internal/viewmanager"
+	"github.com/fliplucky/pieces-store/internal/workspace"
 )
 
 // viewportMargin is how many extra lines above/below the visible window get
@@ -37,16 +38,16 @@ type GuiApp interface {
 }
 
 type GioApp struct {
-	editor *editor.Editor
-	theme  *material.Theme
-	tag    *int
+	ws    *workspace.Workspace
+	theme *material.Theme
+	tag   *int
 	// topRow is the first document row currently rendered — scroll state
 	// lives here (per-window), not on Editor, same reasoning as
 	// viewmanager owning view state generally.
 	topRow int
 }
 
-func CreateApp(ed *editor.Editor) GuiApp {
+func CreateApp(ws *workspace.Workspace) GuiApp {
 	theme := material.NewTheme()
 	theme.Shaper = text.NewShaper(text.WithCollection(gofont.Collection()))
 
@@ -57,9 +58,9 @@ func CreateApp(ed *editor.Editor) GuiApp {
 	theme.Palette.ContrastFg = color.NRGBA{R: 0x1a, G: 0x1b, B: 0x26, A: 0xff} // Deep dark text for cursor overlay
 
 	return &GioApp{
-		editor: ed,
-		theme:  theme,
-		tag:    new(int),
+		ws:    ws,
+		theme: theme,
+		tag:   new(int),
 	}
 }
 
@@ -68,9 +69,19 @@ func (g *GioApp) Run() {
 		window := new(app.Window)
 		window.Option(app.Title("GUI Text Editor"))
 
-		// Monitor editor updates and trigger frame invalidations
+		// Monitor editor updates and trigger frame invalidations.
+		// Current().ChangeChan() is re-fetched on every loop pass (inside
+		// the select, re-read each time the enclosing for loops back
+		// around) rather than captured once — after Switched() fires
+		// because the current buffer changed, the next pass picks up the
+		// new buffer's own channel instead of staying stuck listening to
+		// the one that's no longer on screen.
 		go func() {
-			for range g.editor.ChangeChan() {
+			for {
+				select {
+				case <-g.ws.Current().ChangeChan():
+				case <-g.ws.Switched():
+				}
 				window.Invalidate()
 			}
 		}()
@@ -101,21 +112,22 @@ func (g *GioApp) Run() {
 
 				g.handleEvents(gtx)
 
-				if g.editor.IsQuitRequested() {
+				cur := g.ws.Current()
+				if cur.IsQuitRequested() {
 					window.Perform(system.ActionClose)
 				}
 
-				cursor := g.editor.GetCursor()
+				cursor := cur.GetCursor()
 				lineHeight := lineHeightPx(gtx, g.theme)
 				visibleRows := visibleRowCount(gtx, lineHeight)
 				g.topRow = followCursor(g.topRow, cursor.Row, visibleRows)
-				slice := g.editor.Viewport(g.topRow, visibleRows, viewportMargin)
-				spans := g.editor.StyleSpans(slice.StartOffset, slice.EndOffset)
-				diagnostics := g.editor.DiagnosticSpans(slice.StartOffset, slice.EndOffset)
-				substitutePreview := g.editor.SubstitutePreviewRanges()
-				substitutePreview = append(substitutePreview, g.editor.VisualSelectionRanges()...)
+				slice := cur.Viewport(g.topRow, visibleRows, viewportMargin)
+				spans := cur.StyleSpans(slice.StartOffset, slice.EndOffset)
+				diagnostics := cur.DiagnosticSpans(slice.StartOffset, slice.EndOffset)
+				substitutePreview := cur.SubstitutePreviewRanges()
+				substitutePreview = append(substitutePreview, cur.VisualSelectionRanges()...)
 
-				showNumber, relative := g.editor.LineNumberSettings()
+				showNumber, relative := cur.LineNumberSettings()
 				gutterWidth := 0
 				if showNumber || relative {
 					gutterWidth = viewmanager.GutterWidth(slice.StartRow + len(slice.Lines) - 1)
@@ -138,7 +150,7 @@ func (g *GioApp) Run() {
 								return renderRegisterOverlay(gtx, g.theme, cursor)
 							}),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return renderStatusBar(gtx, g.theme, g.editor, cursor)
+								return renderStatusBar(gtx, g.theme, g.ws, cursor)
 							}),
 						)
 					}),
@@ -204,13 +216,13 @@ func (g *GioApp) handleEvents(gtx layout.Context) {
 			switch len(runes) {
 			case 0:
 			case 1:
-				g.editor.HandleKey(string(runes[0]))
+				g.ws.HandleKey(string(runes[0]))
 			default:
-				g.editor.InsertLiteralText(ev.Text)
+				g.ws.Current().InsertLiteralText(ev.Text)
 			}
 		case key.Event:
 			if keyStr, ok := translateKeyEvent(ev); ok {
-				g.editor.HandleKey(keyStr)
+				g.ws.HandleKey(keyStr)
 			}
 		}
 	}
@@ -898,7 +910,7 @@ func renderHoverPopup(gtx layout.Context, theme *material.Theme, cursor editor.C
 	)
 }
 
-func renderStatusBar(gtx layout.Context, theme *material.Theme, ed *editor.Editor, cursor editor.Cursor) layout.Dimensions {
+func renderStatusBar(gtx layout.Context, theme *material.Theme, ws *workspace.Workspace, cursor editor.Cursor) layout.Dimensions {
 	statusBarBg := color.NRGBA{R: 0x24, G: 0x28, B: 0x3b, A: 0xff} // Tokyo Night darker status background
 
 	return layout.Stack{}.Layout(gtx,
@@ -953,7 +965,7 @@ func renderStatusBar(gtx layout.Context, theme *material.Theme, ed *editor.Edito
 			// Surface why a command like :q was refused (e.g. unsaved
 			// changes) — ErrQuit itself isn't an error worth showing, the
 			// window is about to close.
-			if err := ed.GetLastCommandError(); err != nil && err != editor.ErrQuit {
+			if err := ws.Current().GetLastCommandError(); err != nil && err != editor.ErrQuit {
 				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					lbl := material.Label(theme, theme.TextSize, fmt.Sprintf(" | %s", err))
 					lbl.Color = color.NRGBA{R: 0xf7, G: 0x76, B: 0x8e, A: 0xff} // red
@@ -963,7 +975,23 @@ func renderStatusBar(gtx layout.Context, theme *material.Theme, ed *editor.Edito
 			// Non-error progress text (e.g. ":LspInstall" in flight or its
 			// result) — a separate slot from the error one above, since
 			// StatusMessage isn't error-shaped.
-			if msg := ed.StatusMessage(); msg != "" {
+			if msg := ws.Current().StatusMessage(); msg != "" {
+				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(theme, theme.TextSize, fmt.Sprintf(" | %s", msg))
+					lbl.Color = theme.Palette.Fg
+					return lbl.Layout(gtx)
+				}))
+			}
+			// Workspace-level outcomes (:e/:bnext/:bprev/:bd/:ls) — a
+			// separate slot from the buffer's own, same error/status split.
+			if err := ws.LastError(); err != nil {
+				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Label(theme, theme.TextSize, fmt.Sprintf(" | %s", err))
+					lbl.Color = color.NRGBA{R: 0xf7, G: 0x76, B: 0x8e, A: 0xff} // red
+					return lbl.Layout(gtx)
+				}))
+			}
+			if msg := ws.StatusMessage(); msg != "" {
 				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					lbl := material.Label(theme, theme.TextSize, fmt.Sprintf(" | %s", msg))
 					lbl.Color = theme.Palette.Fg

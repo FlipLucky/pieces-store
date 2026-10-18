@@ -6,6 +6,7 @@ import (
 
 	"github.com/fliplucky/pieces-store/internal/editor"
 	guibase "github.com/fliplucky/pieces-store/internal/gui-base"
+	"github.com/fliplucky/pieces-store/internal/workspace"
 )
 
 func main() {
@@ -21,6 +22,6 @@ func main() {
 		ed = editor.NewEditor("")
 	}
 
-	app := guibase.CreateApp(ed)
+	app := guibase.CreateApp(workspace.New(ed))
 	app.Run()
 }

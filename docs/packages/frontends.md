@@ -1,16 +1,34 @@
 # Front ends: internal/gui-base, internal/tui-base
 
 Thin, single-file (`base.go`) front ends, one per toolkit — Gio (GUI) and
-tview/tcell (TUI). Both hold an `*editor.Editor` and render a Tokyo
-Night–themed view + status bar. Both are meant to be **dumb** — see
+tview/tcell (TUI). Both hold a `*workspace.Workspace` (switched from a bare
+`*editor.Editor` in T56, 2026-10-18 — see [Workspace](workspace.md)) and
+render a Tokyo Night–themed view + status bar. Both are meant to be
+**dumb** — see
 [Dumb Front Ends / Editor as Spine](../concepts/dumb-front-ends.md); no
 editing logic belongs here, only rendering + keystroke forwarding.
 
-Both route every keystroke through `ed.HandleKey` (`gui-base` translates
-Gio's `key.EditEvent`/`key.Event` into the same key-string vocabulary
-`tui-base` gets natively from tcell). Both render via `Editor.Viewport`
-(windowed, scroll-follows-cursor) and color runes per `Editor.StyleSpans`/
+Both route every keystroke through `ws.HandleKey` — the one call site that
+must see Workspace's own command interception, rather than
+`ws.Current().HandleKey` directly (`gui-base` translates Gio's
+`key.EditEvent`/`key.Event` into the same key-string vocabulary
+`tui-base` gets natively from tcell; multi-rune paste/IME text goes
+through `ws.Current().InsertLiteralText` instead, since Workspace only
+ever intercepts a Command-mode `<Enter>`). Every other per-buffer accessor
+(`Viewport`, `StyleSpans`, `DiagnosticSpans`, `GetCursor`, ...) is fetched
+from `cur := ws.Current()`, captured once at the top of each render pass
+so a single frame stays internally consistent even if a buffer switch
+happens concurrently. Both render via `Editor.Viewport` (windowed,
+scroll-follows-cursor) and color runes per `Editor.StyleSpans`/
 `Editor.DiagnosticSpans`, each owning its own `Style`→color mapping.
+
+Both also select on `ws.Switched()` alongside `ws.Current().ChangeChan()`
+in their redraw-trigger goroutine (re-fetching `Current()` fresh on every
+loop pass, so a buffer switch is picked up on the very next iteration) and
+show a second error/status pair (`ws.LastError()`/`ws.StatusMessage()`)
+in their status bar, alongside the existing per-buffer one — see
+[Workspace](workspace.md) for why the redraw wiring needed to change at
+all.
 
 Both also highlight the live Visual-mode selection (`Editor.
 VisualSelectionRanges`, T52, 2026-10-18) by appending it to the exact same
@@ -114,8 +132,8 @@ relying on omission to mean "unchanged."
 
 ## Depends on
 
-[internal/editor](editor.md) — the only package either one imports from
-this codebase (plus their respective UI toolkits).
+[internal/workspace](workspace.md) and, through it,
+[internal/editor](editor.md) — plus their respective UI toolkits.
 
 ## Depended on by
 

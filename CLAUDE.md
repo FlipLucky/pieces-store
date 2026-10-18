@@ -159,23 +159,24 @@ than jumping straight to full IDE breadth.
    ones. Open question not yet resolved: whether "preview" is a narrow,
    special-cased read-only render or the first real instance of multi-pane
    arriving a stage early — worth a deliberate decision, not a default.
-3. **Multi-file / workspace** (explicitly deferred, not designed yet):
-   splits, multiple open files, workspace-wide search/replace. The actual
-   boundary of the action + offset model against multi-file operations is
-   meant to be discovered by building against real requirements here, not
-   theorized in advance. Proposed shape for multi-buffer: one self-contained
-   buffer unit (today's `Editor`, unchanged) per open file/pane, plus an
-   outer "current buffer" selector — matches vim's actual buffer/window
-   separation. Already fully accommodated by the current codebase with zero
-   changes needed, since `Editor` has no package-level/global state
-   (`NewEditor`/`NewEditorFromFile` are already safe to call N times
-   independently); what's net-new when built is a `Workspace`/`Session`
-   type plus `cmd/gui`/`cmd/tui`'s entry point changing shape to accept it.
-   Workspace-wide search is planned via an external/embedded ripgrep-style
-   tool (matches VS Code/Helix/Sublime precedent) rather than forcing search
-   into the per-buffer offset+action model — search is a separate,
-   disk-level subsystem whose only interface to the rest of the system is a
-   `(file, offset)` match consumed via existing per-buffer primitives.
+3. **Multi-file / workspace** — multi-buffer core **done 2026-10-18**
+   (`internal/workspace`, see Current phase's T56 entry), exactly the shape
+   proposed here: one self-contained buffer unit (`Editor`, unchanged) per
+   open file, plus an outer "current buffer" `Workspace` selector. Splits,
+   an oil.nvim-style directory-as-buffer file navigator, and workspace-wide
+   search/replace are still ahead, explicitly sequenced in that order by
+   the user (buffers first because they're the real prerequisite for
+   splits). A real, named scope cut surfaced building the buffer core, not
+   yet addressed: real vim's "two windows showing the *same* buffer with
+   independent cursor/scroll" isn't expressible in this shape at all, since
+   `Editor` still fuses cursor/viewport state to buffer content — v1 splits
+   will only support different buffers side by side until that's decoupled.
+   Workspace-wide search is still planned via an external/embedded
+   ripgrep-style tool (matches VS Code/Helix/Sublime precedent) rather than
+   forcing search into the per-buffer offset+action model — search is a
+   separate, disk-level subsystem whose only interface to the rest of the
+   system is a `(file, offset)` match consumed via existing per-buffer
+   primitives.
 4. **Full IDE** (roughly "step 4-5"): broad language support via
    treesitter's presets + LSP, per the IDE pivot above. Debugging
    (breakpoints, stepping, process/call-stack state) hasn't been discussed
@@ -1150,6 +1151,73 @@ deliberate non-goal here — the user's own framing: both are instances of
 "remember a past thing to replay or recall," worth a real audit before
 either gets its own one-off mechanism.
 
+**Workspace core — multi-buffer shipped, 2026-10-18 (T56)** — following a
+direct, honest IDE-gap comparison against JetBrains/VS Code ("how far off
+are we"), the user picked buffers as the single highest-leverage next move,
+explicitly because it's a prerequisite for splits ("if we can add buffers,
+we can also add splits, which is a direct non flashy to flashy ux") — not
+the flashier oil.nvim-style file navigation the user also named as a want,
+deliberately sequenced after. New `internal/workspace` package, built
+exactly to the Roadmap's own 2026-09-24 proposal: one self-contained
+`*editor.Editor` per open file (unchanged — already safe to construct N
+times independently) plus a thin `Workspace` tracking which one is
+current. No `Buffer` wrapper type — `Editor.GetFilePath()` already covers
+display/identity, so `[]*editor.Editor` directly avoids a redundant second
+source of truth.
+
+The one real design problem this needed solving: `Editor.HandleKey` already
+fully executes a Command-mode `<Enter>` the instant it fires
+(`handleCommandModeKey` calls the public `ExecuteCommand` directly), with
+no seam for an outer layer to act first. Solved with zero new Editor API:
+`Workspace.HandleKey` peeks at `Current().GetCommandBuffer()` before
+forwarding that one keystroke, and if `exmode.Parse` names a command
+Workspace owns (`e`/`edit`, `bn`/`bnext`, `bp`/`bprev`/`bprevious`,
+`bd`/`bdelete`, `bd!`/`bdelete!`, `ls`/`buffers`), handles it entirely and
+resets Editor's pending state via the already-public
+`Current().SetMode(types.ModeNormal)` — which already clears
+`CommandBuffer`/`Completion`/`LSPCompletion` (T4's own cleanup). Everything
+else forwards unchanged. `e`/`edit` deliberately collides with and fully
+supersedes Editor's own `:e` rather than adding a second one. The one
+genuinely new `Editor` method this needed: `IsDirty() bool` (`file.go`), a
+public wrapper around the previously package-private `e.table.Dirty`, for
+`:bd`'s safety check.
+
+A real, previously-undiscovered architectural gap was found and fixed
+before it ever shipped, not glossed over: both frontends' redraw-trigger
+goroutines captured `ed.ChangeChan()` once at boot and `range`d over that
+one fixed channel forever — switching `Workspace.current` to a different
+Editor (its own separate channel) would leave the goroutine listening to a
+buffer no longer on screen. Fixed with a new `Workspace.Switched() <-chan
+struct{}` (same non-blocking-send coalescing idiom as `Editor.ChangeChan`
+itself) fired at the end of every intercepted command, and both frontends'
+redraw loops restructured from a bare `for range ch` into
+`for { select { case <-ws.Current().ChangeChan(): case <-ws.Switched(): } }`
+— `ws.Current()` is re-evaluated fresh on every loop pass, so the pass
+right after a switch automatically listens to the new buffer's own
+channel. `cmd/gui`/`cmd/tui` now construct a `*workspace.Workspace`
+wrapping the same single initial Editor they always built; both
+`gui-base`/`tui-base` swapped their held `*editor.Editor` field for
+`*workspace.Workspace`, fetch `cur := ws.Current()` once per render pass
+for every per-buffer accessor, and route `HandleKey` itself through
+`ws.HandleKey` — the one call site that has to see the interception. Each
+frontend's status bar gained a second error/status pair
+(`ws.LastError()`/`ws.StatusMessage()`) alongside its existing per-buffer
+one. Verified via `internal/workspace/workspace_test.go` (13 tests driving
+real command sequences through `Workspace.HandleKey` itself) and a scripted
+`tmux` smoke test against the real tagged `tui-local` binary (`:e`,
+`:bp`/`:bn` cycling with real content re-rendering, `:ls`, dirty-refusal →
+`:bd!` force-close) — not just the unit suite. `go build`/`vet`/`gofmt`/
+`test ./...` all clean; both tagged `gui-local`/`tui-local` builds verified
+clean.
+
+Scope cuts stated, not glossed over: no oil.nvim-style directory-as-buffer
+navigation yet (the user's explicitly-named *next* want, not this pass);
+no splits yet (buffers' own stated reason for going first, but a separate
+task); real vim's "two windows, one buffer, independent cursor" isn't
+possible with this shape at all — `Editor` still fuses cursor/viewport
+state to buffer content, so v1 splits will only support different buffers
+side by side, a named future scope cut, not an oversight.
+
 ## Module & toolchain
 
 - Module: `github.com/fliplucky/pieces-store`
@@ -1170,7 +1238,7 @@ either gets its own one-off mechanism.
 ## Architecture / package map
 
 ```
-cmd/gui, cmd/tui  →  gui-base / tui-base  →  editor  →  keyengine, offset, piecetable, viewmanager
+cmd/gui, cmd/tui  →  gui-base / tui-base  →  workspace  →  editor  →  keyengine, offset, piecetable, viewmanager
 cmd/api           →  piecetable (see Known issues — cmd/api's role is undetermined but no longer broken)
 ```
 
@@ -1179,9 +1247,10 @@ of their own — `keyengine` needs only `types`) — deliberately, so neither
 can end up in a dependency cycle with `editor` or with each other.
 
 - **`cmd/gui`, `cmd/tui`** — working entry points. Each builds an
-  `editor.Editor` (`editor.NewEditor(...)` or `editor.NewEditorFromFile(path)`)
-  and hands it to the corresponding front end (`guibase.CreateApp(ed).Run()` /
-  `tuibase.Boot(ed)`).
+  `editor.Editor` (`editor.NewEditor(...)` or `editor.NewEditorFromFile(path)`),
+  wraps it in a `workspace.Workspace` (`workspace.New(ed)`), and hands that
+  to the corresponding front end (`guibase.CreateApp(ws).Run()` /
+  `tuibase.Boot(ws)`).
 - **`cmd/api`** — not a consumer-facing app; currently just a broken demo
   harness for exercising the core engine directly (see Known issues). Its
   long-term role is undetermined but may become an extensibility/scripting
@@ -1363,13 +1432,33 @@ can end up in a dependency cycle with `editor` or with each other.
   reduction — see `internal/syntax/syntax_test.go`'s
   `TestGrammarNameCoversEveryCuratedLanguage` for the same guarantee kept
   honest in CI.
+- **`internal/workspace`** — the outer "current buffer" selector (T56,
+  2026-10-18), sitting between the frontends and `editor`: `Workspace`
+  holds `[]*editor.Editor` (one fully independent Editor per open file,
+  unchanged) plus which one is current. `HandleKey` is the one new seam —
+  it peeks at `Current().GetCommandBuffer()` before forwarding a
+  Command-mode `<Enter>`, intercepting `:e`/`:bnext`/`:bprev`/`:bd`/`:ls`
+  entirely (reset via the already-public `Current().SetMode(ModeNormal)`)
+  and forwarding everything else unchanged — `Editor` itself stays
+  completely unaware this package exists. `Switched()` is a
+  `Editor.ChangeChan`-style coalescing notification channel a frontend's
+  redraw loop selects on alongside `Current().ChangeChan()`, needed
+  because switching buffers changes which Editor's own channel is the
+  live one.
 - **`internal/gui-base`**, **`internal/tui-base`** — thin, single-file
-  (`base.go`) front ends, one per toolkit. Both hold an `*editor.Editor` and
+  (`base.go`) front ends, one per toolkit. Both hold a `*workspace.Workspace`
+  (switched from a bare `*editor.Editor` in T56, 2026-10-18 — every
+  per-buffer accessor now goes through a `cur := ws.Current()` fetched
+  once per render pass, and `HandleKey` itself routes through
+  `ws.HandleKey` rather than calling the current Editor directly, so
+  Workspace's command interception is never bypassed) and
   render a Tokyo Night–themed view + status bar, and both route every
-  keystroke through `ed.HandleKey` (`gui-base` translates Gio's
+  keystroke through `ws.HandleKey` (`gui-base` translates Gio's
   `key.EditEvent`/`key.Event` into the same key-string vocabulary
   `tui-base` gets natively from tcell; multi-rune `key.EditEvent` text —
-  paste/IME — goes through `ed.InsertLiteralText` instead). `gui-base`
+  paste/IME — goes through `ws.Current().InsertLiteralText` instead,
+  since Workspace only ever intercepts a Command-mode `<Enter>`, never a
+  literal-text chunk). `gui-base`
   renders via `Editor.Viewport` (windowed, scroll-follows-cursor) with a
   hand-drawn block/pipe cursor per mode (it draws every glyph itself, so
   this is just another glyph). `tui-base` draws text via tview's tag

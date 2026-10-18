@@ -6,6 +6,7 @@ import (
 
 	"github.com/fliplucky/pieces-store/internal/editor"
 	tuibase "github.com/fliplucky/pieces-store/internal/tui-base"
+	"github.com/fliplucky/pieces-store/internal/workspace"
 )
 
 func main() {
@@ -21,7 +22,7 @@ func main() {
 		ed = editor.NewEditor("")
 	}
 
-	if err := tuibase.Boot(ed); err != nil {
+	if err := tuibase.Boot(workspace.New(ed)); err != nil {
 		log.Fatalf("failed to boot TUI: %v", err)
 	}
 }

@@ -3,9 +3,11 @@
 ## cmd/gui, cmd/tui
 
 Working entry points. Each builds an `editor.Editor`
-(`editor.NewEditor(...)` or `editor.NewEditorFromFile(path)`) and hands it
-to the corresponding front end (`guibase.CreateApp(ed).Run()` /
-`tuibase.Boot(ed)`) — see [Front ends](frontends.md).
+(`editor.NewEditor(...)` or `editor.NewEditorFromFile(path)`), wraps it in
+a `workspace.Workspace` (`workspace.New(ed)`, T56, 2026-10-18), and hands
+that to the corresponding front end (`guibase.CreateApp(ws).Run()` /
+`tuibase.Boot(ws)`) — see [Workspace](workspace.md) and
+[Front ends](frontends.md).
 
 ## cmd/api
 
@@ -17,7 +19,7 @@ delete outright, just not built out yet.
 
 ## Depends on
 
-[internal/editor](editor.md) (`cmd/gui`/`cmd/tui`),
-[internal/piecetable](piecetable.md) directly (`cmd/api`, bypassing
-`Editor` entirely — intentional, since it's a core-engine demo harness,
-not an application).
+[internal/editor](editor.md) and [internal/workspace](workspace.md)
+(`cmd/gui`/`cmd/tui`), [internal/piecetable](piecetable.md) directly
+(`cmd/api`, bypassing `Editor` entirely — intentional, since it's a
+core-engine demo harness, not an application).

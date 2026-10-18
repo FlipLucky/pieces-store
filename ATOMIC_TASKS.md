@@ -760,49 +760,37 @@ ordering against T27/T28/T30/T31/T32 above deliberately left open — "decide
 order later"), grouped by shape rather than as one giant task or 20 tiny
 ones:
 
-- [ ] **T33 — Bare line-position & motion-variant keys: `0` `$` `^` `t` `T`
-      `W` `B` `E`.** All table-entry-level: `0`/`$` export already-written-
-      but-unexported `lineStart`/`lineEnd` (`internal/offset/motions.go`)
-      as new noun identities; `^` composes `lineStart` + `FindOffset` with
-      a `Not(IsWhitespace)` predicate (already exported) clamped to
-      `lineEnd`; `t`/`T` are `f`/`F`'s existing `MotionFindCharForward`/
-      `Backward` shape with a one-step-back adjustment; `W`/`B`/`E` are
+- [ ] **T33 — Bare line-position & motion-variant keys: `t` `T` `W` `B`
+      `E`.** `0`/`$`/`^` shipped via T55 (2026-10-18), not part of this
+      task's remainder anymore — see T55's own writeup. What's left: `t`/
+      `T` are `f`/`F`'s existing `MotionFindCharForward`/`Backward` shape
+      with a one-step-back adjustment; `W`/`B`/`E` are
       `MotionWordForward`/`Backward`/`End` with `IsWordChar` swapped for
       `Not(IsWhitespace)` — near-1:1 parametrization of functions that
-      already exist, 3 keybindings almost free. (L — many small pieces
-      bundled, 🔧 mechanical/solo-good)
-- [ ] **T34 — Edit-operator variants: `X` `a` `s` `S` `Y` `D` `C` `I`
-      `A`.** All Verb/EnterInsert composition, no new `ActionKind`: `X` =
-      `resolveMotionRange`'s existing backward-landing branch + a direct
-      entry; `a` = Move(CharForward) + EnterInsert; `s`/`S` = `cl`/`cc`
-      exactly (Change already composes Delete+EnterInsert); `Y` = `yy`
-      (real vim/nvim default, not `y$`); `D`/`C` reuse T33's `$`
-      noun identity once it lands; `I`/`A` reuse T33's `^`/`$` + EnterInsert
-      once those land (real dependency — sequence T33 before this). (L,
-      🔧 mechanical/solo-good)
-- [ ] **T35 — Case-toggle & line-join primitives: `~` `gu` `gU` `g~` `J`
-      `gJ`.** `~` = read-rune (`GetRuneAt` already exists) + Delete(1) +
-      Insert(toggled) + Move, all existing `ActionKind`s. `gu`/`gU`/`g~`
-      generalize `~` over `resolveRange`'s already-generic range
-      resolution (build once, reuse for all three case directions). `J`/
-      `gJ` need one genuinely new `offset` function (join point + smart-
-      whitespace replacement text) but reuse existing Delete+Insert to
-      apply it — same shape as every other primitive here, not a new
-      architectural concept. (M, 🔧/🧠 mixed — `~` is mechanical, the `g`-
-      prefixed range generalization is a real small design)
-- [ ] **T36 — Navigation primitives: `gg` `G` (bare) `{` `}` `;` `,`
-      `gi`.** `gg`/`G` reuse existing `PositionToByteOffset`/
-      `ByteOffsetToPosition` math but need special-casing in
-      `resolveMove`'s generic count-repeat loop (`{count}G` means "go to
-      line N," not "repeat N times" — same kind of exception
-      `resolveLineStep` already carves out for `j`/`k`). Bare `{`/`}`
-      reuse `RangeInnerParagraph`'s existing `prevLineSpan`/`nextLineSpan`/
-      `isBlankSpan` blank-detection directly, just as a Move instead of a
-      Range. `;`/`,` (repeat last `f`/`F`/`t`/`T`) need one new `Cursor`
-      field (last target rune + direction) — same shape as the existing
-      `pendingReplace`/`pendingFindChar` fields. `gi` (resume insert at
-      last exit position) needs one new `Cursor` field, trivial once
-      tracked. (M, ❓)
+      already exist. (M, 🔧 mechanical/solo-good)
+- [x] **T34 — Edit-operator variants: `X` `a` `s` `S` `Y` `D` `C` `I`
+      `A`.** **Shipped via T55 (2026-10-18)** — see that task's writeup for
+      the full detail (all Verb/EnterInsert composition, no new
+      `ActionKind`, exactly as scoped here).
+- [ ] **T35 — Case-toggle generalization: `gu` `gU` `g~`.** `~`/`J`
+      shipped via T55 (2026-10-18), not part of this task's remainder
+      anymore. What's left: `gu`/`gU`/`g~` generalize T55's
+      `RangeToggleCase` idea over `resolveRange`'s already-generic range
+      resolution — lowercase/uppercase/toggle a *motion's* target range
+      (`guw`, `gUiw`), not just `count` characters from the cursor the way
+      bare `~` does. `gJ` (join without the smart-whitespace collapse
+      `RangeJoinLines` already does) is a small variant of that same
+      function, not separately scoped. Needs `g` reachable as a real
+      modifier/second-verb-slot ahead of an operator — `GPrefix` (T55) is
+      currently a bare Direct-reaching verb only, not composable with
+      `d`/`c`/`y` yet; this is the actual new design piece here. (M, 🧠)
+- [ ] **T36 — Repeat-last-motion & resume-insert: `;` `,` `gi`.** `gg`/
+      `G`/`{`/`}` shipped via T55 (2026-10-18), not part of this task's
+      remainder anymore. What's left: `;`/`,` (repeat last `f`/`F`/`t`/`T`)
+      need one new `Cursor` field (last target rune + direction) — same
+      shape as the existing `pendingReplace`/`pendingFindChar` fields.
+      `gi` (resume insert at last exit position) needs one new `Cursor`
+      field, trivial once tracked. (S, ❓)
 - [ ] **T37 — Bracket/quote text objects: `i(`/`a(`, `i{`/`a{`, `i"`/`a"`
       (+ their other bracket/quote equivalents).** Same resolver *shape*
       as `RangeInnerWord`/`RangeAroundWord`, but each needs real bracket-
@@ -1512,6 +1500,108 @@ type.
         the two bug-regression tests and a `d$`/`d0` composability check).
         `go build`/`vet`/`gofmt`/`test ./...` all clean; both tagged
         `gui-local`/`tui-local` builds verified clean. (M, 🧠)
+
+## 12. Workspace core — multi-buffer (2026-10-18)
+
+- [x] **T56 — `internal/workspace`, a thin multi-buffer layer above
+  `*editor.Editor`.** Sequenced by the user directly after the IDE-gap
+  honesty check (T55's own retrospective conversation): buffers chosen as
+  the single highest-leverage next move, both because it's a real,
+  previously-missing IDE-table-stakes feature and because it's explicitly
+  a prerequisite for splits ("if we can add buffers, we can also add
+  splits, which is a direct non flashy to flashy ux" — the user's own
+  framing). Built exactly to the Roadmap's own 2026-09-24 proposal: one
+  self-contained `*editor.Editor` per open file (unchanged —
+  `NewEditor`/`NewEditorFromFile` were already safe to call N times
+  independently, zero package-level state), plus a new `Workspace` type
+  tracking which one is current. No `Buffer{Path, Editor}` wrapper type —
+  `Editor.GetFilePath()` already exists and is reliable, so `[]*editor.Editor`
+  directly avoids a redundant second source of truth (minimal primitives).
+  - **The interception problem and its solution**: `Editor.HandleKey`
+    already fully owns and executes a Command-mode `<Enter>` keystroke the
+    instant it fires (`handleCommandModeKey` calls the public
+    `ExecuteCommand` directly) — no existing seam for an outer layer to act
+    *before* Editor's own (different) `:e` would run. Solved with zero new
+    Editor API: `Workspace.HandleKey` peeks at `Current().GetCommandBuffer()`
+    (already public) before forwarding that one keystroke; if
+    `exmode.Parse` resolves it to a command Workspace itself owns (`e`/
+    `edit`, `bn`/`bnext`, `bp`/`bprev`/`bprevious`, `bd`/`bdelete`,
+    `bd!`/`bdelete!`, `ls`/`buffers`), Workspace handles it entirely and
+    resets Editor's own pending state via the already-public
+    `Current().SetMode(types.ModeNormal)` — which `Cursor.SetMode` already
+    clears `CommandBuffer`/`Completion`/`LSPCompletion` from (T4). Every
+    other keystroke, Command-mode or not, forwards unchanged to
+    `Current().HandleKey`. `e`/`edit` deliberately collides with Editor's
+    own case name — Workspace fully supersedes it rather than adding a
+    second, different `:e`; every other owned name was confirmed
+    collision-free against the real `executeCommandLocked` switch before
+    writing a line of Workspace code.
+  - **One genuinely new piece of `Editor` surface**: `Editor.IsDirty()
+    bool` (`file.go`), a public wrapper around the already-existing but
+    previously package-private `e.table.Dirty` — needed for `:bd`'s dirty
+    safety check, confirmed via research that no such accessor existed
+    anywhere before this task.
+  - **The redraw-binding gap, found and fixed before it ever shipped**:
+    both frontends' redraw-trigger goroutines used to capture
+    `ed.ChangeChan()` once at boot and `range` over that one fixed channel
+    forever. Switching `Workspace.current` to a different `*editor.Editor`
+    (its own, separate channel) would leave that goroutine listening to a
+    buffer no longer on screen. Fixed with a new `Workspace.Switched()
+    <-chan struct{}` (same non-blocking-send coalescing idiom as
+    `Editor.ChangeChan` itself — a burst of switches collapses to one
+    redraw) fired at the end of every intercepted command, and both
+    frontends' redraw loops restructured from a bare `for range ch` into
+    `for { select { case <-ws.Current().ChangeChan(): case <-ws.Switched(): } }`
+    — `ws.Current()` is re-evaluated fresh every loop pass (it's inside the
+    `select`, inside the `for`), so the pass right after a `Switched()`
+    wakeup automatically picks up the new current buffer's own channel. No
+    library/toolkit support needed — plain channel re-selection, found by
+    tracing the actual goroutine shape in both frontends before writing
+    the fix, not guessed.
+  - **Frontend wiring**: `cmd/gui`/`cmd/tui` now construct a
+    `*workspace.Workspace` wrapping the same single initial `*editor.Editor`
+    they always built, and hand that to the frontend instead of the bare
+    Editor. Both `gui-base`/`tui-base` swapped their held `*editor.Editor`
+    field for `*workspace.Workspace`, fetch `cur := ws.Current()` once per
+    render pass (so a render stays internally consistent even if a switch
+    happens concurrently) for every per-buffer accessor, and route
+    `HandleKey` itself through `ws.HandleKey` rather than
+    `cur.HandleKey` directly — the one call site that must see the
+    interception. Each frontend's status bar gained two more slots
+    (`ws.LastError()`/`ws.StatusMessage()`) alongside its existing
+    per-buffer error/status pair, mirroring the same split
+    `Editor.GetLastCommandError()`/`StatusMessage()` already established.
+  - **`:ls` format**: `N`, a `%` marker (current) or space, a `+` marker
+    (dirty) or space, then the buffer's display name (`GetFilePath()`, or
+    vim's own `[No Name]` for an unsaved scratch buffer) — e.g.
+    `1   [No Name]  2%  /tmp/foo.txt`.
+  - Verified two ways: `internal/workspace/workspace_test.go` (new file,
+    13 tests) drives real `:e`/`:bn`/`:bp`/`:bd`/`:bd!`/`:ls` sequences
+    through `Workspace.HandleKey` itself (not a lower-level shortcut),
+    covering open-new vs. switch-to-already-open (compared by
+    `filepath.Abs`, so `./foo` and `foo` from the same directory match),
+    wraparound cycling, the "no other buffers" message, dirty refusal vs.
+    forced close, refusing to close the last remaining buffer, the `:ls`
+    format, an unknown command still reaching Editor's own
+    `ErrUnknownCommand` unchanged, and `Switched()` actually firing. Also
+    smoke-tested against the real tagged `tui-local` binary via a scripted
+    `tmux` session — `:e`, `:bp`/`:bn` cycling with real file content
+    re-rendering, `:ls`, and the dirty-refusal → `:bd!` force-close
+    sequence all confirmed working through the actual compiled binary, not
+    just the test suite. `go build`/`vet`/`gofmt`/`test ./...` all clean;
+    both tagged `gui-local`/`tui-local` production builds verified clean.
+  - **Scope cuts, stated not glossed over**: no oil.nvim-style directory
+    buffer yet (the user's explicitly-stated *next* want for file
+    navigation, not asked for in this pass); no splits yet (the user's own
+    named reason for wanting buffers first, but a separate task); real
+    vim's "two windows, one buffer, independent cursor/scroll" isn't
+    possible with this shape at all — v1 splits (when built) will only
+    support different buffers side by side, since cursor/viewport state is
+    still fused into `Editor` rather than decoupled from buffer content; a
+    deliberate, named scope cut for a future task, not an oversight. `:e`
+    on a nonexistent path still errors rather than creating a new
+    to-be-saved buffer — identical to Editor's own pre-existing `:e`
+    limitation, not a new one introduced here. (L, 🧠)
 
 ## Longer horizon — browse, don't start yet
 

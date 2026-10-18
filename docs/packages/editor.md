@@ -211,6 +211,8 @@ logic out of `Editor` into the type that should own it, per
 
 ## Depended on by
 
+[internal/workspace](workspace.md) (T56, 2026-10-18 — one `*Editor` per
+open buffer, otherwise unaware `Workspace` exists) and, through it,
 [Front ends](frontends.md) (`cmd/gui`/`cmd/tui` via `gui-base`/`tui-base`)
 — the only consumers; nothing else in the module imports `editor`.
 
