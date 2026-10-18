@@ -142,14 +142,20 @@ type SubstituteConfirmState struct {
 // not view state. Frontends read it for rendering, but it lives here
 // because Editor owns it end-to-end.
 type Cursor struct {
-	ByteOffset        int
-	Row               int
-	Col               int
-	Mode              types.Mode
-	CommandBuffer     CommandBuffer
-	Completion        CompletionState
-	LSPCompletion     LSPCompletionState
-	Hover             HoverState
+	ByteOffset    int
+	Row           int
+	Col           int
+	Mode          types.Mode
+	CommandBuffer CommandBuffer
+	Completion    CompletionState
+	LSPCompletion LSPCompletionState
+	Hover         HoverState
+	// SignatureHelp (T46) literally reuses HoverState rather than a
+	// parallel type — a genuine sibling state, not just a similarly-shaped
+	// one: both frontends render it through the exact same popup code path
+	// Hover already uses (see renderHoverPopup in gui-base/tui-base), one
+	// more `case` in each, no new UI primitive needed.
+	SignatureHelp     HoverState
 	RegisterOverview  RegisterOverviewState
 	SubstituteConfirm SubstituteConfirmState
 }
@@ -188,6 +194,13 @@ func (c *Cursor) SetMode(m types.Mode) {
 	}
 	if m != types.ModeInsert {
 		c.LSPCompletion = LSPCompletionState{}
+		// SignatureHelp is Insert-mode-only, same reasoning as
+		// LSPCompletion — unlike Hover (dismissed by any cursor move, see
+		// dismissHoverLocked), it deliberately stays visible through
+		// ordinary typing within the same Insert session (see
+		// maybeTriggerSignatureHelp's doc comment) and only clears here,
+		// on actually leaving Insert mode.
+		c.SignatureHelp = HoverState{}
 	}
 }
 

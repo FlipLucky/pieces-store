@@ -59,6 +59,7 @@ func (e *Editor) handleInsertModeKey(key string) bool {
 	// which called it unconditionally after every single-rune key.
 	if runes := []rune(key); len(runes) == 1 {
 		e.maybeTriggerLSPCompletion(runes[0])
+		e.maybeTriggerSignatureHelp(runes[0])
 	}
 	return true
 }

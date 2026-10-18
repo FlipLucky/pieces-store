@@ -532,6 +532,12 @@ func renderHoverPopup(pages *tview.Pages, popup *tview.TextView, editorView *tvi
 		windowed, sel := completionWindow(display, cursor.LSPCompletion.Index, maxCompletionRows)
 		lines = windowed
 		selected = sel
+	case cursor.SignatureHelp.Active:
+		width := innerW - 4
+		if width < 20 {
+			width = 20
+		}
+		lines = wrapText(cursor.SignatureHelp.Text, width)
 	}
 
 	if len(lines) == 0 {

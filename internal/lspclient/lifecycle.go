@@ -60,6 +60,7 @@ type Capabilities struct {
 	DocumentFormattingProvider json.RawMessage        `json:"documentFormattingProvider"`
 	CompletionProvider         *CompletionOptions     `json:"completionProvider"`
 	SemanticTokensProvider     *SemanticTokensOptions `json:"semanticTokensProvider"`
+	SignatureHelpProvider      *SignatureHelpOptions  `json:"signatureHelpProvider"`
 	// PositionEncoding is empty whenever a server (gopls included, as of
 	// this writing) doesn't negotiate LSP 3.17's positionEncoding
 	// extension — per spec, absence means UTF-16, never "unspecified."
@@ -132,6 +133,11 @@ func (s *Server) Initialize(rootURI string) (Capabilities, error) {
 						"documentation", "defaultLibrary",
 					},
 					"formats": []string{"relative"},
+				},
+				"signatureHelp": map[string]any{
+					"signatureInformation": map[string]any{
+						"documentationFormat": []string{"plaintext", "markdown"},
+					},
 				},
 			},
 		},

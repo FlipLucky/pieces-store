@@ -755,6 +755,8 @@ func renderHoverPopup(gtx layout.Context, theme *material.Theme, cursor editor.C
 		windowed, sel := completionWindow(display, cursor.LSPCompletion.Index, maxCompletionRows)
 		lines = windowed
 		selected = sel
+	case cursor.SignatureHelp.Active:
+		lines = wrapText(cursor.SignatureHelp.Text, 80)
 	default:
 		return layout.Dimensions{}
 	}

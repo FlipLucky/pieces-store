@@ -54,6 +54,15 @@ this; found by getting a real "capability not advertised" skip in testing,
 not assumed from documentation. See [editor](editor.md)'s
 `semantictokens.go` for how the decoded result becomes `StyleSpans`.
 
+`SignatureHelpOptions`/`Server.SignatureHelp`/`SignatureHelpResult.
+ActiveLabel` (T46, 2026-10-18) wire up `textDocument/signatureHelp` —
+deliberately decoding only the active signature's whole `Label` string
+(e.g. `"Println(a ...any) (n int, err error)"`), not per-parameter
+`Label`/`Documentation` ranges — a real, deliberate MVP scope cut matching
+how Hover already shows plain normalized text. See [editor](editor.md)'s
+`Cursor.SignatureHelp` for why it deliberately doesn't get dismissed the
+same way Hover does.
+
 ## internal/lspservice
 
 The **session** type — one per buffer language, mirroring

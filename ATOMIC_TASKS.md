@@ -1031,11 +1031,50 @@ quick wins first, the item needing real investigation last:
       `StyleSpans` correctly, and gets cleared immediately on the next
       edit. `go build`/`vet`/`gofmt`/`test ./...` all clean, plus both
       tagged `gui-local`/`tui-local` builds. (M, 🧠)
-- [ ] **T46 — Signature help.** `textDocument/signatureHelp`, triggered on
-      `(`/`,` the same way completion already triggers on server-advertised
-      characters. Reuses the existing `Cursor.HoverState` shape directly (a
-      sibling state, same popup-rendering path in both frontends) — no new
-      UI primitive needed. (M, 🧠)
+- [x] **T46 — Signature help.** Done 2026-10-18. `textDocument/
+      signatureHelp`, triggered on the server's own advertised
+      `signatureHelpProvider.triggerCharacters` (real `gopls`: `(`/`,`) —
+      `maybeTriggerSignatureHelp` is a near-direct copy of
+      `maybeTriggerLSPCompletion`'s own trigger-character detection
+      shape. `Cursor.SignatureHelp` literally reuses `HoverState` (not a
+      parallel type) — a genuine sibling state: one new `case` in each
+      frontend's existing `renderHoverPopup` switch was the entire
+      rendering change needed, confirmed zero new UI primitive required as
+      scoped. New `lspclient` wiring: `SignatureHelpOptions` on
+      `Capabilities`, `Server.SignatureHelp`, `SignatureHelpResult.
+      ActiveLabel()` — deliberately decodes only `Signatures[].Label`
+      (skips `Parameters`/per-parameter highlighting entirely), so the
+      popup shows the whole active signature as plain text, the same way
+      Hover already shows plain text — a real, deliberate MVP scope cut,
+      not an oversight.
+
+      One real, deliberate behavior difference from Hover, not an
+      inconsistency: Hover is dismissed by any cursor movement
+      (`dismissHoverLocked`), but `SignatureHelp` is **not** — it's
+      Insert-mode-only state (cleared in `Cursor.SetMode` alongside
+      `LSPCompletion`, the same way that's already scoped), and
+      deliberately stays visible through ordinary typing within the same
+      call rather than vanishing the instant the next character moves the
+      cursor, which would make the feature useless (you'd see the
+      signature for one frame and then nothing). The real cost of this
+      choice, documented rather than silently accepted: it can go stale
+      if you move on to a different, unrelated call without pressing a new
+      trigger character — real editors solve this with
+      `retriggerCharacters`/continuous re-querying while a signature stays
+      open, deliberately out of scope here (same reasoning diagnostics'
+      own known linear-scan gap gets — a real, lower-priority version of a
+      solved problem, not unnoticed).
+
+      Verified at both tiers: fast unit tests for `ActiveLabel`'s
+      active-index/empty/out-of-range cases, the no-server guard, and the
+      "persists through plain cursor movement but clears on leaving Insert
+      mode" contract; a real end-to-end test
+      (`TestRealSignatureHelpEndToEnd`, `LSPMANAGER_INTEGRATION=1`) types
+      `fmt.Println(` against real `gopls`, confirms the real signature
+      text arrives, confirms a cursor move does NOT dismiss it, and
+      confirms leaving Insert mode does. `go build`/`vet`/`gofmt`/
+      `test ./...` all clean, plus both tagged `gui-local`/`tui-local`
+      builds. (M, 🧠)
 - [ ] **T43 — Treesitter-powered text objects** (`if`/`af`, `ic`/`ac`,
       parameter objects). **Needs real investigation before implementation,
       not just wiring** — same discipline the original syntax-highlighting

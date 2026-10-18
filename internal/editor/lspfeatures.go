@@ -94,6 +94,61 @@ func (e *Editor) dismissHoverLocked() {
 	}
 }
 
+// ---- Signature help ----
+
+// maybeTriggerSignatureHelp (T46) fires an async textDocument/signatureHelp
+// request if r is one of the active server's advertised trigger characters
+// (real convention: `(`/`,`) — same shape as maybeTriggerLSPCompletion, a
+// genuine side effect kicking off network I/O that stays outside the
+// Action/Executor pipeline. Unlike Hover, the result is deliberately NOT
+// dismissed by ordinary cursor movement/typing afterward (see
+// SignatureHelp's own field doc comment on Cursor) — it stays visible
+// through the rest of that Insert-mode session, only cleared on actually
+// leaving Insert mode (Cursor.SetMode) or replaced by the next trigger.
+// Self-locking — called without any outer lock held.
+func (e *Editor) maybeTriggerSignatureHelp(r rune) {
+	e.mu.Lock()
+	server := e.lspService.Server
+	uri := e.lspService.URI
+	caps := e.lspService.Capabilities
+	e.mu.Unlock()
+
+	if server == nil || caps.SignatureHelpProvider == nil {
+		return
+	}
+	triggered := false
+	for _, ch := range caps.SignatureHelpProvider.TriggerCharacters {
+		if len(ch) > 0 && rune(ch[0]) == r {
+			triggered = true
+			break
+		}
+	}
+	if !triggered {
+		return
+	}
+
+	e.mu.Lock()
+	at := e.cursor.ByteOffset
+	source := []byte(e.table.CombinePieces())
+	e.mu.Unlock()
+	pos := lspclient.OffsetToPosition(source, at)
+
+	e.runAsync(func() asyncApply {
+		result, err := server.SignatureHelp(uri, pos)
+		if err != nil {
+			return nil
+		}
+		text := result.ActiveLabel()
+		return func(ed *Editor) {
+			if !ed.lspService.IsCurrent(server) {
+				return // a different buffer/server is active now — stale
+			}
+			ed.cursor.SignatureHelp = HoverState{Active: text != "", Text: text}
+			ed.notifyChange(piecetable.Edit{})
+		}
+	})
+}
+
 // ---- Formatting ----
 
 // StartFormat is :Format's behavior, for callers that don't already hold

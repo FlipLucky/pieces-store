@@ -366,6 +366,59 @@ func TestRealSemanticTokensEndToEnd(t *testing.T) {
 	}
 }
 
+// TestRealSignatureHelpEndToEnd is T46's real end-to-end proof: type
+// "fmt.Println(" in Insert mode against a real gopls session and confirm a
+// real signature appears — not just that lspclient can decode the
+// response shape, but that the whole trigger-character detection
+// (mirroring completion's own) and Cursor.SignatureHelp wiring works
+// through the real HandleKey path.
+func TestRealSignatureHelpEndToEnd(t *testing.T) {
+	if os.Getenv("LSPMANAGER_INTEGRATION") == "" {
+		t.Skip("set LSPMANAGER_INTEGRATION=1 to run a real gopls end-to-end")
+	}
+	source := "package main\n\nimport \"fmt\"\n\nfunc main() {\n}\n"
+	e, _ := setupRealGoplsEditor(t, source)
+
+	e.mu.RLock()
+	provider := e.lspService.Capabilities.SignatureHelpProvider
+	e.mu.RUnlock()
+	if provider == nil {
+		t.Skip("this gopls build doesn't advertise signatureHelpProvider")
+	}
+
+	insertAt := strings.Index(source, "func main() {\n") + len("func main() {\n")
+	e.mu.Lock()
+	e.cursor.Update(insertAt, 0, 0)
+	e.mu.Unlock()
+	e.HandleKey("i")
+	for _, r := range "fmt.Println(" {
+		e.HandleKey(string(r))
+	}
+
+	waitFor(t, 15*time.Second, func() bool {
+		return e.GetCursor().SignatureHelp.Active
+	}, "signature help never became active after typing \"fmt.Println(\"")
+
+	text := e.GetCursor().SignatureHelp.Text
+	if !strings.Contains(text, "Println") {
+		t.Errorf("SignatureHelp.Text = %q, want it to mention Println", text)
+	}
+	t.Logf("real signature help text: %s", text)
+
+	// A plain cursor move must NOT dismiss it (the deliberate difference
+	// from Hover — see maybeTriggerSignatureHelp's doc comment).
+	e.MoveCursorLeft()
+	if !e.GetCursor().SignatureHelp.Active {
+		t.Error("SignatureHelp dismissed by a plain cursor move, want it to persist")
+	}
+
+	// Leaving Insert mode must dismiss it.
+	e.SetMode(types.ModeNormal)
+	if e.GetCursor().SignatureHelp.Active {
+		t.Error("SignatureHelp still active after leaving Insert mode, want cleared")
+	}
+}
+
 // setupRealGoplsEditor installs a real gopls (gated behind
 // LSPMANAGER_INTEGRATION=1 by its callers) into an isolated cache dir,
 // writes source to a fresh main.go in a temp module, opens it through a

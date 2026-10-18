@@ -163,6 +163,20 @@ logic out of `Editor` into the type that should own it, per
   `moveCursorToLocked`) rather than leaving it until a fresh response
   arrives — the old spans' byte offsets would otherwise point at the
   wrong text post-edit, not just stale text.
+- `lspfeatures.go`'s `maybeTriggerSignatureHelp` (T46, 2026-10-18) — a
+  near-direct copy of `maybeTriggerLSPCompletion`'s own trigger-character
+  detection shape, firing `textDocument/signatureHelp` on the server's
+  advertised `signatureHelpProvider.triggerCharacters`. `Cursor.
+  SignatureHelp` literally reuses `HoverState`, not a parallel type — both
+  frontends' `renderHoverPopup` needed only one new `case` each. Real,
+  deliberate difference from Hover: `dismissHoverLocked` clears Hover on
+  every cursor move, but `SignatureHelp` is cleared only in `Cursor.SetMode`
+  on leaving Insert mode — it deliberately survives ordinary typing within
+  the same call (dismissing it on the very next keystroke would make the
+  popup flash and vanish, defeating the point); the accepted cost is that
+  it can go stale if you move to an unrelated call without a fresh
+  trigger character, a documented, lower-priority gap (real editors solve
+  it with continuous retrigger-character requerying), not an oversight.
 - `async.go` — the answer to async orchestration: an `asyncResults`
   channel drained by one dedicated goroutine that takes `e.mu.Lock()`
   around each queued closure. Every async producer (LSP install,
