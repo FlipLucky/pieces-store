@@ -40,6 +40,20 @@ plus a second edit inserting the import line elsewhere in the document.
 one pass, not sequentially — see that page for why sequencing them would
 have been a real correctness bug.
 
+`SemanticTokensLegend`/`SemanticTokensOptions`/`Server.SemanticTokensFull`/
+`DecodeSemanticTokens` (T48, 2026-10-18) wire up
+`textDocument/semanticTokens/full` — the legend (negotiated once at
+`initialize`) maps each decoded token's type index to a name; `Decode`
+itself is a pure function turning the wire format's delta-encoded flat
+array into absolute `(line, startChar, length, tokenType)` positions, no
+server needed to test it. One real, empirically-caught gotcha: `gopls`
+(v0.23.0) doesn't advertise `semanticTokensProvider` at all unless
+`initialize`'s `initializationOptions` includes a gopls-specific
+`{"semanticTokens": true}` — a generic LSP client wouldn't know to send
+this; found by getting a real "capability not advertised" skip in testing,
+not assumed from documentation. See [editor](editor.md)'s
+`semantictokens.go` for how the decoded result becomes `StyleSpans`.
+
 ## internal/lspservice
 
 The **session** type — one per buffer language, mirroring

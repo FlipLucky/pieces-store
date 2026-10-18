@@ -975,13 +975,62 @@ quick wins first, the item needing real investigation last:
       parse, not a spawned LSP server. `go build`/`vet`/`gofmt`/
       `test ./...` all clean, plus both tagged `gui-local`/`tui-local`
       builds. (M, 🔧)
-- [ ] **T48 — Semantic highlighting.** `textDocument/semanticTokens/full`,
-      merged into `StyleSpans` with the same precedence pattern
-      diagnostics already use (overrides tree-sitter's syntax color at the
-      same byte). New `lspclient` wiring: parsing the delta-encoded token
-      array against the legend negotiated at `initialize` time. No new
-      rendering mechanism — color only, both frontends already apply
-      `StyleSpans` the same way. (M, 🧠)
+- [x] **T48 — Semantic highlighting.** Done 2026-10-18.
+      `textDocument/semanticTokens/full`, merged into `StyleSpans` — listed
+      *first*, ahead of tree-sitter's own spans, so `viewmanager.StyleAt`'s
+      already-documented "first match wins" rule gives semantic tokens
+      priority at any byte both cover, with zero span-splitting and zero
+      new rendering code in either frontend (confirmed: both already apply
+      `StyleSpans` the same way they always have). Real, if minor, gotcha
+      caught empirically rather than assumed: real `gopls` (v0.23.0)
+      doesn't advertise `semanticTokensProvider` at all unless told to via
+      a gopls-specific `initializationOptions: {"semanticTokens": true}`
+      on `initialize` — confirmed by first getting a real "this gopls
+      build doesn't advertise semanticTokensProvider" skip, then fixing it
+      and re-running the same test to confirm real token data actually
+      arrives. New `lspclient` wiring: `SemanticTokensLegend`/
+      `SemanticTokensOptions` on `Capabilities`, `Server.SemanticTokensFull`,
+      and a pure `DecodeSemanticTokens` expanding the wire format's
+      delta-encoded flat array (`deltaLine`/`deltaStartChar`/`length`/
+      `tokenType`/`modifiers` quintuples) into absolute positions — the
+      decode logic itself needed no server at all to test.
+      `internal/lspservice` gained a `SemanticTokensGeneration` counter,
+      the same staleness-guard shape `CompletionGeneration` already
+      established.
+
+      The real design decision wasn't the protocol plumbing, it was
+      **when to ask**: this is a whole-document request by design (no
+      `semanticTokens/range` wiring, out of scope here), so firing it on
+      every keystroke would mean one full-document request per character
+      typed — directly against CLAUDE.md's "no unbounded per-keystroke LSP
+      cost" principle. Solved with a simple in-flight throttle
+      (`semanticTokensInFlight`): at most one outstanding request at a
+      time, a burst of edits while one's in flight fires no new ones, and
+      the first edit after it resolves is free to fire the next — the same
+      "coalesces to the latest" shape `ChangeChan`'s own doc comment
+      already describes for a different channel. Separately, and more
+      importantly: an edit clears `semanticTokens` to `nil` *immediately*
+      (synchronously, in `moveCursorToLocked`, not just "soon" via the
+      async response) — the old spans' byte offsets are computed against
+      the pre-edit document and would point at the *wrong* text once the
+      buffer shifts, not just outdated text, so falling back to plain
+      tree-sitter coloring in the gap is the correct behavior, not a
+      compromise. New `editor/semantictokens.go` holds
+      `requestSemanticTokensLocked`/`decodeSemanticStyleSpans`/
+      `semanticStyleFor` (the small subset of the standard LSP token-type
+      vocabulary this codebase's own `types.Style` enum can actually
+      represent — everything else is dropped, not forced into a
+      wrong-looking color). Verified at both tiers: fast unit tests for
+      the decoder, the type-to-`Style` mapping (including the
+      drop-unknown-types and out-of-range-index cases), the in-flight
+      no-op guard, and the semantic-overrides-syntax merge contract
+      (`TestStyleSpansSemanticTokensOverrideSyntaxAtSameByte`, using a real
+      tree-sitter-parsed `.go` file); and a real end-to-end test
+      (`TestRealSemanticTokensEndToEnd`, `LSPMANAGER_INTEGRATION=1`)
+      confirming real token data arrives from real `gopls`, lands in
+      `StyleSpans` correctly, and gets cleared immediately on the next
+      edit. `go build`/`vet`/`gofmt`/`test ./...` all clean, plus both
+      tagged `gui-local`/`tui-local` builds. (M, 🧠)
 - [ ] **T46 — Signature help.** `textDocument/signatureHelp`, triggered on
       `(`/`,` the same way completion already triggers on server-advertised
       characters. Reuses the existing `Cursor.HoverState` shape directly (a

@@ -400,6 +400,13 @@ func (e *Editor) moveCursorToLocked(newOffset int, edit piecetable.Edit) {
 		}
 		if e.lspService.Active() {
 			e.notifyLSPDidChangeLocked(source)
+			// The buffer just shifted — any semantic-tokens result already
+			// held points at now-wrong byte offsets, not just stale ones
+			// (see semantictokens.go's package doc comment). Clear
+			// immediately (falls back to plain tree-sitter coloring) and
+			// kick off a fresh request.
+			e.semanticTokens = nil
+			e.requestSemanticTokensLocked()
 		}
 	}
 

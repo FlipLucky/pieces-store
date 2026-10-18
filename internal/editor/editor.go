@@ -86,6 +86,15 @@ type Editor struct {
 	// LSP round trip, so the two have to be composed (save happens inside
 	// the format's own async callback), not sequenced naively.
 	formatOnSave bool
+	// semanticTokens/semanticTokensInFlight back real LSP semantic
+	// highlighting (T48) — see semantictokens.go. semanticTokens is nil
+	// whenever there's nothing current to show (no server/no capability,
+	// or cleared because an edit just made its byte offsets stale);
+	// semanticTokensInFlight throttles requests to at most one outstanding
+	// at a time rather than firing a full-document request on every single
+	// keystroke.
+	semanticTokens         []viewmanager.StyledSpan
+	semanticTokensInFlight bool
 }
 
 // ChangeEvent describes one change to the editor's state, delivered on
@@ -183,23 +192,31 @@ func (e *Editor) Viewport(topRow, visibleRows, margin int) viewmanager.Slice {
 	return viewmanager.ViewportSlice(e.table, topRow, visibleRows, margin)
 }
 
-// StyleSpans returns the syntax-highlighting spans overlapping [start,
-// end), for a frontend to render alongside the text from Viewport
-// (typically called with a Slice's StartOffset/EndOffset). Empty whenever
-// the buffer's Language has no tree-sitter grammar wired up (including
-// LanguagePlainText). Deliberately doesn't include diagnostics — see
-// DiagnosticSpans — so a frontend can render both independently (a
-// token's own color, plus a diagnostic as underline) rather than one
-// overriding the other, which is what merging them into one Style-per-byte
-// value would force (viewmanager.StyleAt only ever resolves one Style per
-// overlapping byte).
+// StyleSpans returns the styling spans overlapping [start, end), for a
+// frontend to render alongside the text from Viewport (typically called
+// with a Slice's StartOffset/EndOffset): real LSP semantic tokens (T48),
+// where present, layered over tree-sitter's own syntax spans — both are
+// genuinely the same *kind* of information (what Style a span of text
+// is), just from two sources of differing accuracy, unlike diagnostics
+// (see DiagnosticSpans' own doc comment for why those stay a separate
+// layer instead). Semantic spans are listed first specifically so
+// viewmanager.StyleAt's documented "first match wins" rule gives them
+// priority at any byte both cover — no span-splitting needed. Empty
+// whenever neither source has anything: no tree-sitter grammar wired up
+// (including LanguagePlainText), and no current semantic-tokens result
+// (no server/no capability, or cleared after an edit — see
+// semantictokens.go).
 func (e *Editor) StyleSpans(start, end int) []viewmanager.StyledSpan {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	if e.highlighter == nil {
-		return nil
+	var spans []viewmanager.StyledSpan
+	if len(e.semanticTokens) > 0 {
+		spans = append(spans, viewmanager.SpansForRange(e.semanticTokens, start, end)...)
 	}
-	return e.highlighter.Spans(start, end)
+	if e.highlighter != nil {
+		spans = append(spans, e.highlighter.Spans(start, end)...)
+	}
+	return spans
 }
 
 // DiagnosticSpans returns real LSP diagnostics (see lsp.go) overlapping

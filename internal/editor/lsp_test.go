@@ -10,6 +10,7 @@ import (
 
 	"github.com/fliplucky/pieces-store/internal/lspmanager"
 	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/pieces-store/internal/viewmanager"
 	"github.com/fliplucky/pieces-store/platform"
 )
 
@@ -312,6 +313,57 @@ func TestRealAutoImportCompletionEndToEnd(t *testing.T) {
 		t.Errorf("buffer after confirm = %q, want it to contain strings.ToUpper", got)
 	}
 	t.Logf("buffer after auto-import confirm: %q", got)
+}
+
+// TestRealSemanticTokensEndToEnd is T48's real end-to-end proof: open a
+// real .go file through a live Editor, let its real gopls session respond
+// to a real textDocument/semanticTokens/full request, and confirm
+// StyleSpans actually reflects it — not just that lspclient can decode the
+// wire format (already covered by the fast unit tests), but that the whole
+// pipeline (legend negotiation, generation-guarded async apply, the
+// semantic-over-syntax merge in StyleSpans) produces a real, correct
+// result against a real server.
+func TestRealSemanticTokensEndToEnd(t *testing.T) {
+	if os.Getenv("LSPMANAGER_INTEGRATION") == "" {
+		t.Skip("set LSPMANAGER_INTEGRATION=1 to run a real gopls end-to-end")
+	}
+	source := "package main\n\nfunc main() {\n\tfmt.Println(\"hi\")\n}\n"
+	e, _ := setupRealGoplsEditor(t, source)
+
+	e.mu.RLock()
+	provider := e.lspService.Capabilities.SemanticTokensProvider
+	e.mu.RUnlock()
+	if provider == nil {
+		t.Skip("this gopls build doesn't advertise semanticTokensProvider")
+	}
+
+	waitFor(t, 15*time.Second, func() bool {
+		e.mu.RLock()
+		defer e.mu.RUnlock()
+		return len(e.semanticTokens) > 0
+	}, "semantic tokens never arrived")
+
+	funcOffset := strings.Index(source, "func")
+	spans := e.StyleSpans(funcOffset, funcOffset+4)
+	if style := viewmanager.StyleAt(spans, funcOffset); style != types.StyleKeyword {
+		t.Errorf("StyleAt(%d) for \"func\" = %v, want StyleKeyword (from either source)", funcOffset, style)
+	}
+	t.Logf("real semantic token count: %d", len(e.semanticTokens))
+
+	// A further edit must clear the (now stale) result immediately — see
+	// semantictokens.go's package doc comment for why staleness here is a
+	// correctness issue, not just cosmetic lag.
+	e.mu.Lock()
+	e.cursor.Update(0, 0, 0)
+	e.mu.Unlock()
+	e.HandleKey("i")
+	e.HandleKey("x")
+	e.mu.RLock()
+	stillPresent := len(e.semanticTokens) > 0
+	e.mu.RUnlock()
+	if stillPresent {
+		t.Error("semanticTokens still populated immediately after an edit — should have been cleared")
+	}
 }
 
 // setupRealGoplsEditor installs a real gopls (gated behind

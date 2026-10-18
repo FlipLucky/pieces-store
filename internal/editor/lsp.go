@@ -76,6 +76,8 @@ func (e *Editor) stopLSPServerLocked() {
 	e.diagnostics = nil
 	e.cursor.Hover = HoverState{}
 	e.cursor.LSPCompletion = LSPCompletionState{}
+	e.semanticTokens = nil
+	e.semanticTokensInFlight = false
 	go func() { _ = old.Stop() }()
 }
 
@@ -86,7 +88,9 @@ func (e *Editor) stopLSPServerLocked() {
 func (e *Editor) reopenLSPDocumentLocked(filePath string) {
 	e.lspService.Reopen(filePath)
 	e.diagnostics = nil
+	e.semanticTokens = nil
 	_ = e.lspService.DidOpen(e.table.CombinePieces())
+	e.requestSemanticTokensLocked()
 }
 
 // startLSPAsyncLocked resolves entry's installed binary, spawns it, and
@@ -144,11 +148,13 @@ func (e *Editor) startLSPAsyncLocked(lang types.Language, entry lspmanager.Entry
 			}
 			ed.lspService.Start(server, lang, filePath, caps)
 			ed.diagnostics = nil
+			ed.semanticTokens = nil
 			if err := ed.lspService.DidOpen(ed.table.CombinePieces()); err != nil {
 				ed.setStatusMessageLocked(fmt.Sprintf("%s: didOpen failed: %v", displayPackageName(entry), err))
 				return
 			}
 			ed.setStatusMessageLocked(fmt.Sprintf("%s ready", displayPackageName(entry)))
+			ed.requestSemanticTokensLocked()
 			go ed.watchLSPDiagnostics(server, diagnosticsCh)
 		}
 	})

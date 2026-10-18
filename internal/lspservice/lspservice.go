@@ -27,12 +27,13 @@ import (
 // The zero value correctly means "no session" — Active reports false, and
 // Reset returns any populated Service to exactly this state.
 type Service struct {
-	Server               *lspclient.Server
-	Language             types.Language
-	Version              int
-	URI                  string
-	Capabilities         lspclient.Capabilities
-	CompletionGeneration int
+	Server                   *lspclient.Server
+	Language                 types.Language
+	Version                  int
+	URI                      string
+	Capabilities             lspclient.Capabilities
+	CompletionGeneration     int
+	SemanticTokensGeneration int
 }
 
 // languageID maps a types.Language to LSP's own languageId string
@@ -140,4 +141,12 @@ func (s *Service) DidChange(source []byte) error {
 func (s *Service) NextCompletionGeneration() int {
 	s.CompletionGeneration++
 	return s.CompletionGeneration
+}
+
+// NextSemanticTokensGeneration mirrors NextCompletionGeneration, for a
+// semantic-tokens/full response superseded by a further edit before it
+// arrived (T48).
+func (s *Service) NextSemanticTokensGeneration() int {
+	s.SemanticTokensGeneration++
+	return s.SemanticTokensGeneration
 }

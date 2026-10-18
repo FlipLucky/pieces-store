@@ -143,6 +143,26 @@ logic out of `Editor` into the type that should own it, per
   `interpreter.ProcessNormal` as a `BracketContext{Skip}` snapshot, the
   same pattern `PasteClipboard` already established — `interpreter` itself
   never touches the highlighter directly.
+- `semantictokens.go` (T48, 2026-10-18) — real LSP semantic highlighting:
+  `requestSemanticTokensLocked` fires `textDocument/semanticTokens/full`
+  when the active server advertises it and no request is already in
+  flight (`semanticTokensInFlight` throttles to at most one outstanding
+  request — firing one per keystroke on a whole-document-only protocol
+  call would be exactly the unbounded per-keystroke LSP cost CLAUDE.md's
+  IDE pivot section warns against). `decodeSemanticStyleSpans`/
+  `semanticStyleFor` turn a response into `viewmanager.StyledSpan`s,
+  dropping any token type this codebase's `types.Style` enum has no real
+  entry for rather than forcing a wrong-looking color. `StyleSpans`
+  (`editor.go`) lists these *before* `highlighter.Spans`, so
+  `viewmanager.StyleAt`'s "first match wins" rule gives semantic tokens
+  priority over tree-sitter's syntax guess at any byte both cover — unlike
+  diagnostics (kept a deliberately separate layer, see
+  [viewmanager](viewmanager.md)), semantic tokens are genuinely the same
+  *kind* of information, just a better source when available. An edit
+  clears `semanticTokens` to `nil` immediately (`dispatch.go`'s
+  `moveCursorToLocked`) rather than leaving it until a fresh response
+  arrives — the old spans' byte offsets would otherwise point at the
+  wrong text post-edit, not just stale text.
 - `async.go` — the answer to async orchestration: an `asyncResults`
   channel drained by one dedicated goroutine that takes `e.mu.Lock()`
   around each queued closure. Every async producer (LSP install,

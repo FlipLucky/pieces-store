@@ -56,9 +56,10 @@ type CompletionOptions struct {
 // true}), and gopls itself sends different shapes for different
 // capabilities in the same response — Supported() below normalizes both.
 type Capabilities struct {
-	HoverProvider              json.RawMessage    `json:"hoverProvider"`
-	DocumentFormattingProvider json.RawMessage    `json:"documentFormattingProvider"`
-	CompletionProvider         *CompletionOptions `json:"completionProvider"`
+	HoverProvider              json.RawMessage        `json:"hoverProvider"`
+	DocumentFormattingProvider json.RawMessage        `json:"documentFormattingProvider"`
+	CompletionProvider         *CompletionOptions     `json:"completionProvider"`
+	SemanticTokensProvider     *SemanticTokensOptions `json:"semanticTokensProvider"`
 	// PositionEncoding is empty whenever a server (gopls included, as of
 	// this writing) doesn't negotiate LSP 3.17's positionEncoding
 	// extension — per spec, absence means UTF-16, never "unspecified."
@@ -96,6 +97,12 @@ func (s *Server) Initialize(rootURI string) (Capabilities, error) {
 	params := map[string]any{
 		"processId": os.Getpid(),
 		"rootUri":   rootURI,
+		// gopls specifically (confirmed empirically, v0.23.0) doesn't
+		// advertise semanticTokensProvider at all unless this gopls-
+		// specific setting is turned on — per spec, initializationOptions
+		// is entirely server-defined/opaque, so a server that doesn't
+		// recognize this key just ignores it.
+		"initializationOptions": map[string]any{"semanticTokens": true},
 		"capabilities": map[string]any{
 			"general": map[string]any{
 				"positionEncodings": []string{"utf-8", "utf-16"},
@@ -104,6 +111,28 @@ func (s *Server) Initialize(rootURI string) (Capabilities, error) {
 				"hover":              map[string]any{"contentFormat": []string{"plaintext", "markdown"}},
 				"completion":         map[string]any{"completionItem": map[string]any{"snippetSupport": false}},
 				"publishDiagnostics": map[string]any{},
+				// semanticTokens (T48): the generous, standard LSP token-
+				// type/modifier vocabulary (the same set VS Code itself
+				// declares) — pieces-store only maps a handful of these to
+				// a real types.Style (see editor/semantictokens.go), but
+				// declaring the full set here just tells the server what
+				// it's allowed to send, not what gets rendered.
+				"semanticTokens": map[string]any{
+					"requests": map[string]any{"full": true},
+					"tokenTypes": []string{
+						"namespace", "type", "class", "enum", "interface",
+						"struct", "typeParameter", "parameter", "variable",
+						"property", "enumMember", "event", "function",
+						"method", "macro", "keyword", "modifier", "comment",
+						"string", "number", "regexp", "operator", "decorator",
+					},
+					"tokenModifiers": []string{
+						"declaration", "definition", "readonly", "static",
+						"deprecated", "abstract", "async", "modification",
+						"documentation", "defaultLibrary",
+					},
+					"formats": []string{"relative"},
+				},
 			},
 		},
 	}
