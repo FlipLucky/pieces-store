@@ -113,6 +113,7 @@ func (g *GioApp) Run() {
 				spans := g.editor.StyleSpans(slice.StartOffset, slice.EndOffset)
 				diagnostics := g.editor.DiagnosticSpans(slice.StartOffset, slice.EndOffset)
 				substitutePreview := g.editor.SubstitutePreviewRanges()
+				substitutePreview = append(substitutePreview, g.editor.VisualSelectionRanges()...)
 
 				showNumber, relative := g.editor.LineNumberSettings()
 				gutterWidth := 0

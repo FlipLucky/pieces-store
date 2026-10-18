@@ -12,6 +12,13 @@ Gio's `key.EditEvent`/`key.Event` into the same key-string vocabulary
 (windowed, scroll-follows-cursor) and color runes per `Editor.StyleSpans`/
 `Editor.DiagnosticSpans`, each owning its own `Style`→color mapping.
 
+Both also highlight the live Visual-mode selection (`Editor.
+VisualSelectionRanges`, T52, 2026-10-18) by appending it to the exact same
+range slice `SubstitutePreviewRanges` already produces, before either
+frontend's existing per-line filter runs — one line changed per frontend,
+no second highlight mechanism, since the two are mutually exclusive by
+mode (Command vs. Visual) and share the identical `#515c7e` background.
+
 Both also highlight live `:s///`/`:%s///` matches while the command is
 still being typed (`Editor.SubstitutePreviewRanges` — nvim's own
 "inccommand" preview, see [exmode](small-packages.md)'s T29 entry), with a

@@ -76,6 +76,44 @@ const (
 	ActionCycleCompletion
 	ActionYank
 	ActionBeginFindChar
+
+	// ActionEnterVisual/ActionExitVisual are bare mode switches, structurally
+	// identical to ActionEnterInsert/ActionEnterCommand — see CLAUDE.md's
+	// "Minimal primitives, maximal composition." ActionSetVisualAnchor/
+	// ActionSetVisualKind are each their own small, independently-reusable
+	// primitive rather than payload bundled onto ActionEnterVisual: entering
+	// Visual fresh dispatches all three together, but switching Visual kind
+	// mid-selection (real vim's V-while-already-in-char-visual) dispatches
+	// ActionSetVisualKind alone, with no mode switch or anchor reset.
+	ActionEnterVisual
+	ActionExitVisual
+	ActionSetVisualAnchor
+	ActionSetVisualKind
+
+	// ActionBlockInsert (T54, 2026-10-18) is block-visual paste: insert
+	// text at N independent byte offsets, one per row — genuinely new,
+	// not reuse of ActionInsertText, whose hasInsertion capability is
+	// tied to a single cursor-relative caret and can't express N
+	// locations. Block delete/yank deliberately did NOT need a new
+	// ActionKind (they reuse ActionDelete/ActionYank via the new
+	// hasRanges capability instead of hasRange) — a visual selection is
+	// just an offset, N of them for block mode, same operation either
+	// way. Insertion has no existing single-location primitive that
+	// generalizes the same way, so this one earns its place.
+	ActionBlockInsert
+)
+
+// VisualKind distinguishes Visual mode's three selection shapes — a real
+// enum, not a bool, since Block (T54) needs a third value, not just a
+// second. VisualNone (the zero value) is Cursor's resting state outside
+// Visual mode.
+type VisualKind int
+
+const (
+	VisualNone VisualKind = iota
+	VisualChar
+	VisualLine
+	VisualBlock
 )
 
 // Language identifies which language a buffer's content is written in —

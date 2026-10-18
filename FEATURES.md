@@ -18,15 +18,30 @@ known bugs/gaps, see `CLAUDE.md`'s Known Issues and `BACKLOG.md` instead.
 **Vim-style modal editing** (via `internal/keyengine` + `internal/offset`),
 with full GUI/TUI parity — both front ends route through the identical
 engine, not just one of them:
-- Modes: Normal, Insert, Command (Visual mode exists as a concept but has
-  no keybindings wired to it yet — see Future).
+- Modes: Normal, Insert, Command, and now Visual (char, line, and block) —
+  `v`/`V`/`<C-v>` enter it, with motions, `d`/`x`/`y`/`c`, `o`, text objects
+  (`iw`/`ip`/`aw`, extending/replacing the selection), and block mode's own
+  rectangle select/delete/yank/paste all working (block mode's `I`/`A` is
+  queued alongside multi-cursor — see Future).
 - Cursor motion: `h`/`j`/`k`/`l` and the arrow keys (Normal mode; arrow
-  keys also move the cursor in Insert mode), plus `w`/`b`/`e` (word
-  forward/backward/end), all with count prefixes (`3l`, `2w`).
+  keys also move the cursor in Insert mode), `w`/`b`/`e` (word
+  forward/backward/end), `0`/`^`/`$` (column 0 / first non-blank / end of
+  line), `gg`/`G` (first/last line, or line N with a count), and `{`/`}`
+  (paragraph backward/forward) — all with count prefixes (`3l`, `2w`,
+  `5G`).
 - Text objects: `diw` (delete inner word), `daw` (delete around word,
-  including trailing whitespace), `dip` (delete inner paragraph).
-- Line operations: `dd` (delete line), `o` / `O` (open a new line
-  below/above, auto-indented — see below — and enter Insert mode).
+  including trailing whitespace), `dip` (delete inner paragraph) — and
+  every motion above composes with `d`/`c`/`y` the same way (`d0`, `d$`,
+  `d}`, ...).
+- Line operations: `dd` (delete line), `D`/`C`/`Y` (delete/change/yank to
+  end of line, `Y` a true alias for `yy`), `X` (delete character
+  backward), `s`/`S` (substitute character/line), `J` (join the current
+  line with the next, collapsing the line break into a single space), `~`
+  (toggle the case of the character under the cursor), `o` / `O` (open a
+  new line below/above, auto-indented — see below — and enter Insert
+  mode).
+- Insert-mode entry: `i` (before cursor), `a` (after cursor), `A` (end of
+  line), `I` (first non-blank).
 - Undo / redo: `u` / `Ctrl-r`.
 - Replace: `r` swaps the character under the cursor for the next keystroke.
 - Yank, delete, change, and paste (`y`/`d`/`c`/`p`/`P`), including
@@ -120,16 +135,10 @@ features above verified against an actual running `gopls`, not simulated.
 
 ## Present — known gaps in what's above
 
-- **Visual mode isn't reachable** — no key enters it yet.
 - **No macros or incremental search** — `/`-style search is queued
   (`ATOMIC_TASKS.md`'s T31); macros aren't scoped yet at all. (Registers
   and yank/paste, listed as a gap here previously, shipped 2026-10-11 —
   see Present above.)
-- **The GUI's hover/completion popup position is an approximation, not
-  pixel-exact** — Gio's text rendering here doesn't track real pixel
-  coordinates for the cursor, so the popup's position is estimated from
-  font size, not measured. The terminal version doesn't have this
-  limitation (terminal cells are exact by nature).
 - **Go-to-definition** is a further, separate plan again, since it also
   needs multi-buffer/workspace support that doesn't exist yet.
 

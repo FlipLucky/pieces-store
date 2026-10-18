@@ -296,6 +296,7 @@ func Boot(ed *editor.Editor) error {
 		spans := ed.StyleSpans(slice.StartOffset, slice.EndOffset)
 		diagnosticSpans := ed.DiagnosticSpans(slice.StartOffset, slice.EndOffset)
 		substitutePreview := ed.SubstitutePreviewRanges()
+		substitutePreview = append(substitutePreview, ed.VisualSelectionRanges()...)
 
 		showNumber, relative := ed.LineNumberSettings()
 		gutterWidth := 0

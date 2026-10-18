@@ -165,11 +165,13 @@ list, not a gap.
   like an abandoned attempt to simplify/replace `FindOffset` that never got
   finished. Not yet decided whether to delete it or complete the
   replacement.
-- **`internal/keyengine/visual_mode.go`** is still the original copy-paste
-  placeholder — real Visual-mode operator semantics differ from Normal's
-  (an operator acts on the current selection directly, no following noun
-  needed), so this needs real design work, not just filling in the
-  existing table shape, whenever Visual mode is actually in scope.
+- ~~**`internal/keyengine/visual_mode.go`** is still the original
+  copy-paste placeholder~~ **Scoped 2026-10-18** — real design work is
+  done (operators act directly on the current selection, no following
+  noun, a genuinely different shape from Normal's verb+noun grammar);
+  see `ATOMIC_TASKS.md`'s T52-T54 for the settled v1 implementation plan
+  (char/linewise core, text objects + `o`, block mode) and its parked
+  `I`/`A`-with-multi-cursor follow-on.
 - ~~**Counted delete isn't implemented**~~ **Done** — `3diw`/`2dd`/etc. all
   work via `interpreter.resolveRange`'s count-chaining (`ATOMIC_TASKS.md`'s
   T17); `3dw`-style bare-motion counting works via `resolveMotionRange`

@@ -65,6 +65,19 @@ type Editor interface {
 	// BeginPendingFindChar puts the editor into "the next raw key is the
 	// target char for f/F" mode — mirrors BeginPendingReplace.
 	BeginPendingFindChar(forward bool)
+	// SetVisualAnchor/SetVisualKind (T52) are each their own small
+	// capability rather than folded into SetMode — see CLAUDE.md's
+	// "Minimal primitives, maximal composition."
+	SetVisualAnchor(offset int)
+	SetVisualKind(kind types.VisualKind)
+	// DeleteRangesWithRegister/YankRanges (T54) are
+	// DeleteRangeWithRegister/YankRange's block-mode siblings: N
+	// independent ranges stored as one multi-value register entry.
+	DeleteRangesWithRegister(ranges []offset.TextRange, register clipboardregister.RegisterType, named rune)
+	YankRanges(ranges []offset.TextRange, register clipboardregister.RegisterType, named rune)
+	// InsertTextAtOffsets (T54) is block-visual paste: N independent
+	// insertions in one call, rather than one cursor-relative caret.
+	InsertTextAtOffsets(insertions []offset.Insertion)
 }
 
 // Small, optional-capability interfaces for pulling an Action's payload
@@ -89,6 +102,22 @@ type (
 	hasLinewise      interface{ Linewise() bool }
 	hasForward       interface{ Forward() bool }
 	hasNamedRegister interface{ NamedRegister() rune }
+	hasVisualAnchor  interface{ AnchorOffset() int }
+	hasVisualKind    interface{ SelectedVisualKind() types.VisualKind }
+	// hasRanges (T54) is hasRange's block-mode sibling — N independent
+	// ranges instead of one. Checked before hasRange in ActionDelete/
+	// ActionYank's own cases, so block's BlockDeleteAction/BlockYankAction
+	// (which only satisfy hasRanges) and char/linewise's DeleteAction/
+	// YankAction (which only satisfy hasRange) each reach the right branch
+	// structurally, with no Kind-level distinction needed — a visual
+	// selection is just an offset, N of them for block mode, same
+	// ActionKind either way.
+	hasRanges interface {
+		Ranges() ([]offset.TextRange, bool)
+	}
+	hasInsertions interface {
+		Inserts() ([]offset.Insertion, bool)
+	}
 )
 
 // Dispatch performs a, calling whichever of ed's methods its Kind maps to.
@@ -109,7 +138,21 @@ func Dispatch(a Action, ed Editor) {
 			}
 		}
 	case types.ActionDelete:
-		if p, ok := a.(hasRange); ok {
+		if p, ok := a.(hasRanges); ok {
+			if ranges, has := p.Ranges(); has {
+				register, store := clipboardregister.RegisterType(0), false
+				if rp, ok := a.(hasRegisterDestination); ok {
+					register, store = rp.RegisterDestination()
+				}
+				if store {
+					var named rune
+					if np, ok := a.(hasNamedRegister); ok {
+						named = np.NamedRegister()
+					}
+					ed.DeleteRangesWithRegister(ranges, register, named)
+				}
+			}
+		} else if p, ok := a.(hasRange); ok {
 			if rng, has := p.Range(); has {
 				register, store := clipboardregister.RegisterType(0), false
 				if rp, ok := a.(hasRegisterDestination); ok {
@@ -131,8 +174,24 @@ func Dispatch(a Action, ed Editor) {
 			}
 		}
 	case types.ActionYank:
-		if p, ok := a.(hasRange); ok {
+		if p, ok := a.(hasRanges); ok {
+			if ranges, has := p.Ranges(); has {
+				register := clipboardregister.Yank
+				if rp, ok := a.(hasRegisterDestination); ok {
+					register, _ = rp.RegisterDestination()
+				}
+				var named rune
+				if np, ok := a.(hasNamedRegister); ok {
+					named = np.NamedRegister()
+				}
+				ed.YankRanges(ranges, register, named)
+			}
+		} else if p, ok := a.(hasRange); ok {
 			if rng, has := p.Range(); has {
+				register := clipboardregister.Yank
+				if rp, ok := a.(hasRegisterDestination); ok {
+					register, _ = rp.RegisterDestination()
+				}
 				linewise := false
 				if lp, ok := a.(hasLinewise); ok {
 					linewise = lp.Linewise()
@@ -141,7 +200,7 @@ func Dispatch(a Action, ed Editor) {
 				if np, ok := a.(hasNamedRegister); ok {
 					named = np.NamedRegister()
 				}
-				ed.YankRange(rng, clipboardregister.Yank, linewise, named)
+				ed.YankRange(rng, register, linewise, named)
 			}
 		}
 	case types.ActionUndo:
@@ -194,6 +253,24 @@ func Dispatch(a Action, ed Editor) {
 	case types.ActionCycleCompletion:
 		if p, ok := a.(hasDirection); ok {
 			ed.CycleLSPCompletion(p.Direction())
+		}
+	case types.ActionEnterVisual:
+		ed.SetMode(types.ModeVisual)
+	case types.ActionExitVisual:
+		ed.SetMode(types.ModeNormal)
+	case types.ActionSetVisualAnchor:
+		if p, ok := a.(hasVisualAnchor); ok {
+			ed.SetVisualAnchor(p.AnchorOffset())
+		}
+	case types.ActionSetVisualKind:
+		if p, ok := a.(hasVisualKind); ok {
+			ed.SetVisualKind(p.SelectedVisualKind())
+		}
+	case types.ActionBlockInsert:
+		if p, ok := a.(hasInsertions); ok {
+			if insertions, has := p.Inserts(); has {
+				ed.InsertTextAtOffsets(insertions)
+			}
 		}
 	}
 }

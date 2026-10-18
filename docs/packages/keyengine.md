@@ -26,8 +26,59 @@ cycle with `editor` or with [offset](offset.md).
   Move-only direct entries. `%` is bare-only, deliberately not composable
   with an operator yet (`d%` isn't wired) — same documented scope limit
   `f`/`F` already carry.
-- `visual_mode.go` — placeholder scaffolding only; no Visual keybinding is
-  implemented yet.
+
+  T55 (2026-10-18, "fill out Normal mode") added: `0`/`^`/`$`/`{`/`}` as
+  both Directs and Nouns, the same dual-registration shape `h`/`l` already
+  established (so `d0`/`d^`/`d$`/`d{`/`d}` compose for free — see
+  [interpreter](interpreter.md)); `G` as a Direct-only Noun (`BufferEnd`,
+  deliberately *not* a Noun — see below); a new `g` verb (`GPrefix`, no
+  `allowedKeyActions`) purely to reuse the existing doubled-verb mechanism
+  for `gg`, costing zero parser changes; `D`/`C`/`Y`/`X`/`s`/`S` as pure
+  Direct aliases of existing Verb+Noun pairs (`Y` is a true alias for `yy`,
+  not `y$`, matching real vim); three new standalone verbs for insert-entry
+  (`AppendAfterCursor`/`AppendEndOfLine`/`InsertAtFirstNonBlank`, i.e.
+  `a`/`A`/`I`) and two more for standalone edits (`ToggleCase`/`JoinLines`,
+  i.e. `~`/`J`). `ExecutableCommand` also gained `HasCount bool` (set from
+  the parser's own already-tracked `countStarted`) — the one genuinely new
+  primitive this pass needed, since bare `G` (last line) and `5G` (line 5)
+  both read `Count` as its default of 1 otherwise. `BufferStart`/`BufferEnd`
+  are deliberately **not** registered as Nouns (no `dgg`/`dG`): real vim's
+  version of that is linewise (whole lines), a structurally different shape
+  than every other Noun here, which all resolve through the charwise
+  `resolveMotionRange` path — a scope cut, not an oversight.
+- `visual_mode.go` — Visual mode's real tables (T52, 2026-10-18), not
+  scaffolding anymore. `CreateVisualModeDirects` is flat: every motion/
+  `d`/`x`/`y`/`c`/`o`/`v`/`V`/`<Esc>` fires immediately with no following
+  noun, since Visual's grammar never composes an operator with a target
+  the way Normal's `diw` does. Required one real `modeTables()` fix beyond
+  just populating this table: it used to hardcode `nil` for Visual mode's
+  direct table (nothing had ever needed it) — now returns the real map.
+
+  `CreateVisualModeVerbs`/`Nouns` (T53, 2026-10-18) back `iw`/`ip`/`aw`:
+  `i`/`a` are registered as Visual's own "verbs" — not semantically verbs,
+  just because keyengine's state machine always promotes whichever key
+  starts a sequence into the Verb slot, with no way to start directly in
+  the Modifier slot the way Normal's `diw` does. Same whitelist shape
+  Normal's real `Inside`/`Around` modifiers already use (`i`→`w`/`p`,
+  `a`→`w`); `w`/`p` land in `CreateVisualModeNouns`, reusing the same
+  `Word`/`Paragraph` identities Normal's own nouns use. `w` staying a bare
+  Direct too is the same non-collision shape as the directs-vs-nouns
+  section below, not a new exception.
+
+  `<C-v>` (T54, 2026-10-18) is a plain `CreateVisualModeDirects` entry too
+  (`{Verb: EnterVisualBlock}`), registered in both `normal_mode.go` (enters
+  block-visual from Normal) and `visual_mode.go` (switches kind in place,
+  or exits, if already in Visual — same live-state decision
+  `interpreter.ProcessVisual` already makes for `v`/`V`). No keyengine
+  changes beyond the two table entries — block mode's actual rectangle
+  logic lives entirely in [interpreter](interpreter.md).
+
+  `0`/`^`/`$`/`{`/`}` (T55, 2026-10-18) extend `visual_mode.go`'s direct
+  table too — same `Move`+`Noun` identities Normal mode's own directs
+  resolve through, free given the identical `resolveMove` path Visual's
+  existing `w`/`b`/`e`/`h`/`l`/`j`/`k` already use. `gg` isn't included
+  there — it would need `g` registered as a Visual-mode verb too for the
+  doubled-key mechanism below, deferred since nothing asked for it yet.
 
 ## Named register prefix (`"{letter}`, T24, 2026-10-11)
 

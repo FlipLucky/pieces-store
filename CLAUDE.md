@@ -308,6 +308,67 @@ resolver is reused whether a noun is reached after an operator verb or
 pressed standalone as a "silent verb" (e.g. `w`'s offset logic is identical
 for `dw` and for bare `w`-as-move).
 
+**Minimal primitives, maximal composition** (added 2026-10-18, refined same
+day, from the Visual-mode design conversation): the author's own framing —
+a computer is just AND/OR/NOT gates, each trivial alone, combined into
+everything a computer does; the goal when adding a new `ActionKind`/
+capability interface/table entry is the same ratio, as few primitives as
+possible, combined into as many results as possible. This is two distinct
+failure modes, not a single "smaller is always better" spectrum — a
+primitive has to clear both at once:
+
+1. **False grouping** (the "one method to send an email template" case):
+   merging things that look alike from the outside but actually diverge
+   underneath. The tell shows up *after* the merge — a `format` parameter,
+   then a branch on it, then a field that's required for one case and
+   `nil` for another, until the function's job description needs an
+   "except." Once a unit's own contract needs an "except," it was never
+   one job.
+2. **Over-splitting**: pulling a fragment out because small is a rule
+   instead of a result. The tell is the opposite of (1) — not
+   conditionals piling up, but *nothing* piling up anywhere: the
+   extracted piece has exactly one caller, forever, because it was never
+   an independently meaningful operation to begin with — just a step of
+   some larger process, legible only in that process's context. It buys
+   a file to jump to and nothing else.
+
+The actual test, passing both at once: **does this primitive have one
+job, statable with no "it depends" — and does at least one *other*,
+already-real combination want to call it alone, not just hypothetically
+someday?** Fail the first test and you have the email method. Fail the
+second and you have a fragment nobody but its one caller will ever touch
+again — split for the sake of splitting, not because the piece is
+reusable.
+
+Note this is a different axis from file/code *organization* —
+`internal/piecetable`'s `reader.go`/`writer.go` split is a canonical
+grouping of "the ways you read" vs. "the ways you mutate" the same
+`Table`, decided for human navigability, not a claim that reading and
+writing are independently-dispatchable primitives the way an `ActionKind`
+is. Don't conflate "should this be its own file" with "should this be its
+own primitive" — they're answered by different questions.
+
+The case that produced this entry: entering Visual mode (`v`) looked at
+first like it wanted one new `ActionEnterVisual{Kind}` action — mode
+switch and anchor-storage bundled together, since both happen on the same
+keystroke. Rejected: `ActionEnterInsert`/`ActionEnterCommand` already
+establish "mode switch" as its own plain `ActionKind` with no payload —
+reusing that shape instead of inventing a bigger one keeps `ActionEnterVisual`
+itself trivial. The anchor becomes its own `ActionSetVisualAnchor{Offset}`,
+dispatched alongside it (`interpreter.ProcessNormal` already resolves into
+"one or more Actions" — this costs no new plumbing). Pushed one step
+further during the same conversation: `VisualKind` (char/line/block)
+almost got folded into the same entry action too, until a real vim
+behavior exposed why that would've been wrong — pressing `V` *while
+already in* char-visual switches to linewise in place, without leaving
+Visual or losing the anchor. If `VisualKind` only ever got set as a side
+effect of entering, that case needs a special branch bolted onto the
+enter-handler. Split out as its own `ActionSetVisualKind{Kind}`, it
+reuses with zero new logic: entering fresh dispatches three actions
+together (`EnterVisual`, `SetVisualAnchor`, `SetVisualKind`); switching
+kind mid-selection dispatches `SetVisualKind` alone. See
+`ATOMIC_TASKS.md`'s T52 for where this lands in the actual implementation.
+
 ## Current phase
 
 Front ends were wired up early "for gratification" and have since been
@@ -974,6 +1035,121 @@ and: this feels nice"). First item done, the other two queued
   via `internal/editor/complete_test.go`; `go build`/`vet`/`gofmt`/
   `test ./...` all clean, plus both tagged `gui-local`/`tui-local` builds.
 
+**Visual mode core shipped, 2026-10-18 (T52)** — `v`/`V` now really enter
+Visual mode (not reachable at all before this), with motions, `d`/`x`/`y`/`c`,
+and `o` all working end to end. See `ATOMIC_TASKS.md`'s T52 for the full
+writeup and "Minimal primitives, maximal composition" above for the design
+reasoning this session settled on first. Three things worth knowing before
+touching Visual mode again:
+
+- The selection is never stored as its own range — `Cursor.VisualAnchor`
+  plus the live cursor are the *only* state, and a single new
+  `interpreter.ResolveVisualRange` derives the actual `offset.TextRange`
+  on demand, used both to act on the selection and (via
+  `Editor.VisualSelectionRanges`, feeding the exact same highlight
+  mechanism `:s///`'s live preview already uses) to render it.
+- Visual selection is **inclusive** of wherever the cursor lands — `v`
+  then `w` selects through and including the landed-on character, not up
+  to it the way Normal's exclusive `dw` does. Confirmed against real vim
+  before shipping, not assumed from Normal's own bare-motion behavior
+  (same discipline this project got pushed back into once before, over
+  `3diw`).
+- `<C-v>` (block mode) is deliberately **not** bound yet — binding it now
+  would enter `VisualKind.Block` while `d`/`x`/`y`/`c` still resolve
+  through the single-range path, silently doing the wrong thing instead
+  of the right one. T54 wires `<C-v>` and real rectangle resolution
+  together, not as two separate steps.
+
+`keyengine`'s `modeTables()` used to hardcode `nil` for Visual mode's
+direct table (nothing had ever needed it) — now returns a real
+`visualModeDirects` map, the one actual dispatch-logic change this task
+needed; everything else was new table data plus one new small interpreter
+resolver, exactly the "simple, not easy" foundation test this file
+describes above. One pre-existing inconsistency got fixed as a side
+effect, not left to accumulate further: `YankAction` never carried its own
+register destination (Executor hardcoded `clipboardregister.Yank` for
+every yank), unlike `DeleteAction`, which already did — needed fixing for
+Visual mode's `y` to land in `RegisterType.Visual` instead, and fixes the
+same gap for Normal mode's `y` for free.
+
+**Visual mode text objects shipped, same day (T53)** — `iw`/`ip`/`aw` now
+extend/replace the current selection. The one real wrinkle: keyengine's
+parser always promotes whichever key starts a sequence into the Verb slot,
+with no way to start directly in the Modifier slot the way Normal mode's
+`diw` does. Rather than touch the parser, `i`/`a` are registered as Visual
+mode's own "verbs" in `CreateVisualModeVerbs` (same whitelist shape Normal's
+real `Inside`/`Around` modifiers already use) — `ProcessVisual` reads the
+result off `cmd.Verb` instead of `cmd.Modifier` and calls the exact same
+`resolveRange` Normal's `diw`/`daw`/`dip`/`3diw` already use, confirming
+"simple, not easy" held: new behavior as table data, zero changes to
+`keyengine`'s actual dispatch logic.
+
+**Block-visual mode shipped, same day (T54)** — `<C-v>` now really enters
+block-visual mode, with rectangle select, `d`/`x`/`y`/`c`, and `p`/`P` all
+working end to end; Visual mode's v1 design is now fully shipped. The
+design held exactly as scoped going in (see `ATOMIC_TASKS.md`'s T54
+writeup for the full detail) — no new `ActionKind` for block delete/yank
+(a new `hasRanges` capability carrying N `offset.TextRange`s does the
+work, checked before the existing single-range `hasRange` in
+`executor.Dispatch`'s `ActionDelete`/`ActionYank` cases — a visual
+selection is just an offset, N of them for block mode, same operation
+either way), one genuinely new `ActionBlockInsert` `ActionKind` for block
+paste (the one shape existing `ActionInsertText` structurally can't
+express — N independent insertion points, not one cursor-relative caret),
+and `clipboardregister.Entry.Value string` → `Entry.Values []string`
+widened exactly where T52 predicted it would be earned, not before. Two
+real edge cases confirmed to resolve themselves for free, not needing
+extra logic: block *selection* clips to a short row's actual length
+(`offset.PositionToByteOffset` already clamps there), while block *paste*
+pads a short target row with spaces instead (the opposite behavior,
+matching real vim both ways). Block `c` deliberately stays a smaller,
+honest partial behavior — delete the rectangle, enter Insert at one point
+— rather than real vim's multi-row replay, which is cut from this whole
+project phase alongside `I`/`A` and parked for a later joint design with
+multi-cursor. All 10 new tests in `internal/editor/visual_test.go` passed
+on their first run against the real `HandleKey` path, including a full
+yank-then-paste round trip with no manually-seeded state — the design
+conversation's reasoning held with zero surprises. Both tagged
+`gui-local`/`tui-local` builds verified clean.
+
+**Ordinary Normal-mode gaps filled, same day (T55)** — the agreed-upon
+detour right after Visual mode's v1 shipped, deliberately not T43's
+treesitter text objects: `0`/`^`/`$`, `gg`/`G`, `{`/`}`, `D`/`C`/`Y`, `X`,
+`s`/`S`, `a`/`A`/`I`, `~`, `J`. All reuse existing `ActionKind`s — no new
+primitive beyond one genuinely new field, `ExecutableCommand.HasCount`
+(needed because bare `G` means "last line" while `5G` means "line 5," and
+`Count` alone can't tell those apart, both defaulting to 1). `gg` needed
+zero parser changes: it reuses the exact same doubled-verb mechanism `dd`
+already established, via a new `g` verb. `0`/`^`/`$`/`{`/`}` are registered
+as both Directs and Nouns, so `d0`/`d^`/`d$`/`d{`/`d}` compose for free
+through the existing short-delete path — `D`/`C` are literally `d$`/`c$`
+spelled as one keystroke, costing nothing once `$` exists as a Noun.
+`a`/`A`/`I` and `~`/`J` are each a two-action composition
+(`MoveAction`+`EnterInsertAction`, or `DeleteAction`+`InsertTextAction`) —
+the same primitives-not-new-shapes discipline this file's "Minimal
+primitives, maximal composition" entry already documents.
+
+Two real, pre-existing bugs surfaced by this pass, not introduced by it —
+both fixed at the root, same discipline as every prior `offset`-package
+correctness fix here: (1) `offset.lineStart`'s boundary-at-0 ambiguity —
+calling it directly at offset 0 on a document whose first character is
+itself a newline (an empty first line) wrongly concluded the cursor was
+already past that empty line, since `FindOffset`'s match predicate never
+tests its own starting position, only ones it steps onto; fixed with a
+two-line early return, confirmed against real vim semantics first. (2)
+`cc`/`S` merged into the next line instead of leaving an empty line to
+type into — `cc` itself had no end-to-end test at all before this task,
+despite existing since 2026-10-11; `resolveRange`'s shared `RangeLine`
+chaining includes the trailing newline, correct for `dd`/`yy` but wrong
+for Change, fixed with a new `trimTrailingNewline` helper, verified to
+generalize to a count (`3cc`) via a dedicated test. 29 new tests in
+`internal/editor/normalmode_ext_test.go`, both tagged `gui-local`/
+`tui-local` builds verified clean. The parked dot-repeat/command-history
+idea (T55's own "Longer horizon" entry in `ATOMIC_TASKS.md`) is a
+deliberate non-goal here — the user's own framing: both are instances of
+"remember a past thing to replay or recall," worth a real audit before
+either gets its own one-off mechanism.
+
 ## Module & toolchain
 
 - Module: `github.com/fliplucky/pieces-store`
@@ -1423,10 +1599,15 @@ any mode.
 
 Known gaps as of now:
 
-1. **Visual mode is unreachable** — `internal/keyengine/visual_mode.go` is
-   still the original copy-paste placeholder (not fleshed out — see the
-   comment there for why), and nothing enters Visual mode (no `v` key is
-   registered anywhere). Not in scope until Visual mode is actually needed.
+1. ~~**Visual mode is unreachable**~~ **Fully shipped 2026-10-18
+   (T52-T54)** — `v`/`V`/`<C-v>` genuinely enter Visual mode (char/line/
+   block); motions, `d`/`x`/`y`/`c`, `o`, `iw`/`ip`/`aw`, and block-mode
+   rectangle select/delete/yank/paste all work through a real `HandleKey`
+   path (see Current phase for the full writeup of each). The only piece
+   deliberately left out of this v1 is block mode's `I`/`A` (multi-row
+   insert replay) — cut on purpose, parked for a later, joint design with
+   multi-cursor (see `ATOMIC_TASKS.md`'s "Longer horizon" section and
+   `BACKLOG.md`).
 2. **`internal/viewmanager/virtual_grid.go`'s `GetScreenPosition` is a
    no-op** passthrough — scroll offsets, line wrapping, tab expansion, and
    a line-number gutter aren't implemented yet (distinct from

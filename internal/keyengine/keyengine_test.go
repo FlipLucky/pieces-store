@@ -117,20 +117,25 @@ func TestCountPrefix(t *testing.T) {
 		}
 	})
 
-	t.Run("leading zero is not swallowed into count", func(t *testing.T) {
+	t.Run("leading zero resolves as a motion, not a count digit", func(t *testing.T) {
 		cc := CreateCommandContext()
-		// "0" alone isn't registered as anything yet (no motion wired to
-		// it) — it must fizzle cleanly, not silently become count=10 the
-		// way it used to.
+		// A bare leading "0" is real vim's own column-0 motion (T55,
+		// 2026-10-18), never a count digit — the digit-accumulation branch
+		// special-cases exactly this (0 with no count already started), so
+		// it must fall through to the Direct table instead of silently
+		// becoming count=10 the way an un-special-cased "0" would.
 		cmd, err := cc.ProcessCommand("0")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if cmd != nil {
-			t.Fatalf("bare \"0\" produced a command %+v, want nil (fizzle)", cmd)
+		if cmd == nil {
+			t.Fatal("bare \"0\" produced no command, want the LineStart motion")
 		}
-		if cc.count != 1 || cc.countStarted {
-			t.Errorf("internal count state = %d (started=%v), want reset (1, false)", cc.count, cc.countStarted)
+		if cmd.Verb != Move || cmd.Noun != LineStart {
+			t.Errorf("bare \"0\" = %+v, want Verb=Move Noun=LineStart", cmd)
+		}
+		if cmd.Count != 1 {
+			t.Errorf("bare \"0\"'s Count = %d, want 1 (not swallowed as a count digit)", cmd.Count)
 		}
 	})
 }
@@ -169,21 +174,94 @@ func TestInconsistentKeymapIsAnError(t *testing.T) {
 	}
 }
 
-func TestVisualModeHasNoDirects(t *testing.T) {
+// TestVisualModeMotionsResolveAsDirects covers T52: Visual mode's own
+// direct table now resolves "w" the same way Normal mode's does (same
+// Verb/Noun identity) — replaces the old TestVisualModeHasNoDirects, which
+// asserted the pre-T52 scaffolding's "no direct table yet, so w fizzles"
+// behavior. That behavior is no longer correct, so the test was replaced
+// outright rather than left stale alongside new ones (same discipline
+// T27's command-name-completion change already established).
+func TestVisualModeMotionsResolveAsDirects(t *testing.T) {
 	cc := CreateCommandContext()
 	cc.SetEditorMode(types.ModeNormal)
-	cmd, err := cc.ProcessCommand("w")
-	if err != nil || cmd == nil {
-		t.Fatalf("bare w in Normal mode should resolve to a Move, got cmd=%+v err=%v", cmd, err)
+	normalCmd, err := cc.ProcessCommand("w")
+	if err != nil || normalCmd == nil {
+		t.Fatalf("bare w in Normal mode should resolve to a Move, got cmd=%+v err=%v", normalCmd, err)
 	}
 
 	cc2 := CreateCommandContext()
 	cc2.SetEditorMode(types.ModeVisual)
-	cmd2, err2 := cc2.ProcessCommand("w")
+	visualCmd, err2 := cc2.ProcessCommand("w")
 	if err2 != nil {
 		t.Fatalf("unexpected error in visual mode: %v", err2)
 	}
-	if cmd2 != nil {
-		t.Fatalf("visual mode has no direct table yet, \"w\" should fizzle, got %+v", cmd2)
+	if visualCmd == nil {
+		t.Fatal("w in Visual mode should resolve as a direct, same as Normal mode, got nil")
+	}
+	if visualCmd.Verb != normalCmd.Verb || visualCmd.Noun != normalCmd.Noun {
+		t.Errorf("Visual mode's w = %+v, want the same Verb/Noun identity as Normal mode's %+v", visualCmd, normalCmd)
+	}
+}
+
+// TestVisualModeEntryAndExitDirects covers the rest of T52's direct table:
+// d/x/y/c act on the current selection (no noun), o swaps ends, v/V/<Esc>
+// are entry/exit/toggle verbs — all reachable without composing a
+// modifier+noun sequence, since Visual's grammar never needs one for these.
+func TestVisualModeEntryAndExitDirects(t *testing.T) {
+	cases := []struct {
+		key          string
+		wantVerb     KeyActionName
+		wantModifier KeyActionName
+		wantNoun     KeyActionName
+	}{
+		{"d", Delete, None, None},
+		{"x", Delete, None, None},
+		{"y", Yank, None, None},
+		{"c", Change, None, None},
+		{"o", VisualSwapEnds, None, None},
+		{"v", EnterVisualChar, None, None},
+		{"V", EnterVisualLine, None, None},
+		{"<Esc>", ExitVisual, None, None},
+	}
+	for _, c := range cases {
+		cc := CreateCommandContext()
+		cc.SetEditorMode(types.ModeVisual)
+		cmd, err := cc.ProcessCommand(c.key)
+		if err != nil {
+			t.Errorf("%q: unexpected error: %v", c.key, err)
+			continue
+		}
+		if cmd == nil {
+			t.Errorf("%q: expected a direct command, got nil", c.key)
+			continue
+		}
+		if cmd.Verb != c.wantVerb || cmd.Modifier != c.wantModifier || cmd.Noun != c.wantNoun {
+			t.Errorf("%q = %+v, want Verb=%v Modifier=%v Noun=%v", c.key, cmd, c.wantVerb, c.wantModifier, c.wantNoun)
+		}
+	}
+}
+
+// TestNormalModeEntersVisual covers v/V from Normal mode — the entry point
+// into Visual mode, distinct from the same keys' re-pressed/toggle meaning
+// once already inside Visual mode (see TestVisualModeEntryAndExitDirects).
+func TestNormalModeEntersVisual(t *testing.T) {
+	cases := []struct {
+		key      string
+		wantVerb KeyActionName
+	}{
+		{"v", EnterVisualChar},
+		{"V", EnterVisualLine},
+	}
+	for _, c := range cases {
+		cc := CreateCommandContext()
+		cc.SetEditorMode(types.ModeNormal)
+		cmd, err := cc.ProcessCommand(c.key)
+		if err != nil {
+			t.Errorf("%q: unexpected error: %v", c.key, err)
+			continue
+		}
+		if cmd == nil || cmd.Verb != c.wantVerb {
+			t.Errorf("%q in Normal mode = %+v, want Verb=%v", c.key, cmd, c.wantVerb)
+		}
 	}
 }

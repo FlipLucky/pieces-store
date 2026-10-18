@@ -53,6 +53,41 @@ exact same signal that already makes `dd`/`yy` linewise in
 [keyengine](keyengine.md)'s own doubled-verb mechanism. No new parsing
 needed; the Processor determines it from the key sequence it already has.
 
+## `RegisterType.Visual` actually populated (T52, 2026-10-18)
+
+The `visualRegister` field and `RegisterType.Visual` constant existed
+since before Visual mode itself did — `:registers`' display formatting
+(T25) was already wired to show it, just with nothing ever stored there.
+T52's `d`/`x`/`y`/`c` in Visual mode are the first real producers: they
+store into `RegisterType.Visual` (and the unnamed register, same as every
+delete/yank), not Normal mode's `Delete`/`Yank` categories, keeping
+Visual's own history genuinely separate from `dd`'s or `yy`'s in the
+`:registers` overview. `YankAction` needed a new `Register` field +
+`RegisterDestination()` method to make this possible at all — see
+[executor](executor.md)'s entry on the pre-existing hardcoding this fixed.
+
+`Entry.Value string` → `Entry.Values []string` (needed for T54's block
+mode, where one register entry spans N rows) was deliberately **not** done
+here — T52 never produced more than one value per entry, so there was no
+second real caller yet to justify the wider shape.
+
+## `Entry.Values []string` widened for block mode (T54, 2026-10-18)
+
+T54 is the task that actually earned the widening predicted above:
+`Entry.Value string` → `Entry.Values []string`, with `len(Values) == 1` for
+every existing charwise/linewise entry (unchanged behavior) and
+`len(Values) == N` (one string per row) for a block-visual entry — sharing
+this one field rather than bolting on a second, parallel shape.
+`len(Values) > 1` is the signal `Paste`/`:registers` use to tell a block
+entry apart from a charwise/linewise one, no separate flag needed.
+
+New `StoreBlockRegisterValue(values []string, registerType, named rune)`
+is `StoreRegisterValue`'s block-mode sibling: stores one multi-value
+`Entry` into the unnamed register, the given category register, and (if
+set) a named letter register — otherwise identical plumbing.
+`registers.go`'s `formatRegisterLine` shows a block entry with a `b` kind
+marker (checked before the existing `l`/`c` linewise/charwise check).
+
 ## A real edge case, found and fixed
 
 Pasting *after* the buffer's last line (which has no trailing `"\n"` of

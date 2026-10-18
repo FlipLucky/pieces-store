@@ -8,8 +8,17 @@ type RegisterType int
 // friends — an arbitrary span of text). Paste needs this to decide whether
 // pasted text becomes its own fresh line or splices in at the cursor the
 // way a plain text insert does.
+//
+// Values has length 1 for every charwise/linewise entry (Values[0] is the
+// whole stored text) and length N for a block-visual entry (T54,
+// 2026-10-18) — one string per row spanned, sharing this one field rather
+// than a second, parallel shape (Entry.Value string was widened to this
+// only once T54 actually needed a second value per entry — T52's own
+// char/linewise work deliberately left it alone, see ATOMIC_TASKS.md's
+// T52 writeup). len(Values) > 1 is what Paste/:registers use to tell a
+// block entry apart from a charwise/linewise one — no separate flag.
 type Entry struct {
-	Value    string
+	Values   []string
 	Linewise bool
 }
 
@@ -55,7 +64,30 @@ func (c *ClipboardRegister) StoreRegisterValue(
 	linewise bool,
 	named rune,
 ) {
-	entry := Entry{Value: value, Linewise: linewise}
+	entry := Entry{Values: []string{value}, Linewise: linewise}
+	appendToRegister(entry, &c.unnamedRegister)
+	if register := c.getRegister(registerType); register != nil {
+		appendToRegister(entry, register)
+	}
+	if named != 0 {
+		if c.namedRegister == nil {
+			c.namedRegister = make(map[rune]Entry)
+		}
+		c.namedRegister[named] = entry
+	}
+}
+
+// StoreBlockRegisterValue is StoreRegisterValue's block-mode sibling (T54,
+// 2026-10-18): values holds one string per row spanned by a block-visual
+// selection, stored as a single multi-value Entry rather than N separate
+// ones. Otherwise identical — always updates the unnamed register too,
+// plus the given category register and, if set, a named letter register.
+func (c *ClipboardRegister) StoreBlockRegisterValue(
+	values []string,
+	registerType RegisterType,
+	named rune,
+) {
+	entry := Entry{Values: values}
 	appendToRegister(entry, &c.unnamedRegister)
 	if register := c.getRegister(registerType); register != nil {
 		appendToRegister(entry, register)

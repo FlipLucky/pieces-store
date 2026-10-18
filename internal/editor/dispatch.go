@@ -2,6 +2,7 @@ package editor
 
 import (
 	"fmt"
+	"sort"
 
 	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
 	"github.com/fliplucky/pieces-store/internal/executor"
@@ -23,6 +24,8 @@ func (e *Editor) HandleKey(key string) bool {
 		return e.handleInsertModeKey(key)
 	case types.ModeCommand:
 		return e.handleCommandModeKey(key)
+	case types.ModeVisual:
+		return e.handleVisualModeKey(key)
 	default:
 		return e.handleNormalModeKey(key)
 	}
@@ -186,12 +189,42 @@ func (e *Editor) handleNormalModeKey(key string) bool {
 	} else {
 		entry, ok = e.clipboardRegister.Paste()
 	}
-	clip.Value, clip.Linewise, clip.Ok = entry.Value, entry.Linewise, ok
+	clip.Values, clip.Linewise, clip.Ok = entry.Values, entry.Linewise, ok
 	bracket := interpreter.BracketContext{}
 	if cmd.Noun == keyengine.BracketMatch {
 		bracket.Skip = e.bracketMatchSkipLocked(pos.ByteOffset)
 	}
 	actions := interpreter.ProcessNormal(cmd, e.table, pos, clip, bracket)
+	e.dispatchLocked(toExecutorActions(actions)...)
+	e.mu.Unlock()
+	return true
+}
+
+// handleVisualModeKey mirrors handleNormalModeKey's shape — resolution
+// (interpreter.ProcessVisual, reading e.table/cursor state) and
+// application (executor.Dispatch) are one atomic locked section for the
+// same reason handleNormalModeKey's own comment gives — but routes through
+// ProcessVisual instead of ProcessNormal, since Visual's own grammar
+// (operators act on the current selection, no following noun) needs a
+// different resolver, not a different parser.
+func (e *Editor) handleVisualModeKey(key string) bool {
+	e.commandContext.SetEditorMode(types.Mode(e.GetModeInt()))
+	cmd, err := e.commandContext.ProcessCommand(key)
+	if err != nil {
+		panic(fmt.Sprintf("keyengine: %v (key=%q)", err, key))
+	}
+	if cmd == nil {
+		return true
+	}
+
+	e.mu.Lock()
+	pos := interpreter.Position{ByteOffset: e.cursor.ByteOffset, Row: e.cursor.Row, Col: e.cursor.Col}
+	visual := interpreter.VisualContext{Anchor: e.cursor.VisualAnchor, Kind: e.cursor.VisualKind}
+	bracket := interpreter.BracketContext{}
+	if cmd.Noun == keyengine.BracketMatch {
+		bracket.Skip = e.bracketMatchSkipLocked(pos.ByteOffset)
+	}
+	actions := interpreter.ProcessVisual(cmd, e.table, pos, visual, bracket)
 	e.dispatchLocked(toExecutorActions(actions)...)
 	e.mu.Unlock()
 	return true
@@ -282,10 +315,82 @@ func (v lockedEditorView) YankRange(rng offset.TextRange, register clipboardregi
 	v.e.moveCursorToLocked(rng.Start, piecetable.Edit{})
 }
 
+// DeleteRangesWithRegister is DeleteRangeWithRegister's block-mode sibling
+// (T54): N independent ranges, one per row a block-visual selection spans,
+// stored as a single multi-value register entry (one string per range,
+// read before any deletion happens so later offset shifts can't corrupt
+// an already-captured row's text) and then deleted together, sorted
+// bottom-to-top — the same "process in an order nothing already-applied
+// can invalidate" reasoning applySubstituteEditsLocked's own end-to-start
+// loop already established for :%s///'s multi-match apply, just for an
+// independent-range batch instead of a sequential-match one.
+func (v lockedEditorView) DeleteRangesWithRegister(ranges []offset.TextRange, register clipboardregister.RegisterType, named rune) {
+	if len(ranges) == 0 {
+		return
+	}
+	values := make([]string, len(ranges))
+	for i, rng := range ranges {
+		values[i] = string(v.e.table.GetRange(rng.Start, rng.Start+rng.Length))
+	}
+	v.e.clipboardRegister.StoreBlockRegisterValue(values, register, named)
+
+	sorted := append([]offset.TextRange(nil), ranges...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Start > sorted[j].Start })
+	for _, rng := range sorted {
+		if rng.Length > 0 {
+			v.e.table.Delete(rng.Start, rng.Length)
+		}
+	}
+	v.e.finishBufferMutationLocked(ranges[0].Start)
+}
+
+// YankRanges mirrors DeleteRangesWithRegister but never mutates the buffer
+// — y never does, same as YankRange's own single-range version.
+func (v lockedEditorView) YankRanges(ranges []offset.TextRange, register clipboardregister.RegisterType, named rune) {
+	if len(ranges) == 0 {
+		return
+	}
+	values := make([]string, len(ranges))
+	for i, rng := range ranges {
+		values[i] = string(v.e.table.GetRange(rng.Start, rng.Start+rng.Length))
+	}
+	v.e.clipboardRegister.StoreBlockRegisterValue(values, register, named)
+	v.e.moveCursorToLocked(ranges[0].Start, piecetable.Edit{})
+}
+
+// InsertTextAtOffsets implements block-visual paste (ActionBlockInsert,
+// T54): N independent insertions, applied sorted bottom-to-top so a lower
+// row's insertion never shifts a higher, not-yet-applied row's offset —
+// the insert-side mirror of DeleteRangesWithRegister's own bottom-to-top
+// reasoning. Cursor lands at the topmost (first) insertion, matching where
+// a block paste visually "starts."
+func (v lockedEditorView) InsertTextAtOffsets(insertions []offset.Insertion) {
+	if len(insertions) == 0 {
+		return
+	}
+	sorted := append([]offset.Insertion(nil), insertions...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Offset > sorted[j].Offset })
+	for _, ins := range sorted {
+		if ins.Text != "" {
+			v.e.table.Insert(ins.Offset, []byte(ins.Text))
+		}
+	}
+	v.e.finishBufferMutationLocked(sorted[len(sorted)-1].Offset)
+}
+
 func (v lockedEditorView) Undo() bool { return v.e.undoLocked() }
 func (v lockedEditorView) Redo() bool { return v.e.redoLocked() }
 
 func (v lockedEditorView) SetMode(m types.Mode) { v.e.setModeLocked(m) }
+
+// SetVisualAnchor/SetVisualKind (T52) are plain field stamps — Visual
+// mode's whole state is these two fields, nothing else, per
+// ResolveVisualRange's doc comment on why the selection is never stored as
+// its own range.
+func (v lockedEditorView) SetVisualAnchor(offsetVal int) { v.e.cursor.VisualAnchor = offsetVal }
+func (v lockedEditorView) SetVisualKind(kind types.VisualKind) {
+	v.e.cursor.VisualKind = kind
+}
 
 func (v lockedEditorView) BeginPendingReplace() { v.e.pendingReplace = true }
 

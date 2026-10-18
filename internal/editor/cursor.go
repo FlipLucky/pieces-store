@@ -158,6 +158,12 @@ type Cursor struct {
 	SignatureHelp     HoverState
 	RegisterOverview  RegisterOverviewState
 	SubstituteConfirm SubstituteConfirmState
+	// VisualAnchor/VisualKind (T52) are Visual mode's only state: the
+	// selection itself is never stored as its own range, only derived from
+	// (VisualAnchor, ByteOffset) on demand — see
+	// interpreter.ResolveVisualRange and Editor.VisualSelectionRanges.
+	VisualAnchor int
+	VisualKind   types.VisualKind
 }
 
 func NewCursor() *Cursor {
@@ -201,6 +207,10 @@ func (c *Cursor) SetMode(m types.Mode) {
 		// maybeTriggerSignatureHelp's doc comment) and only clears here,
 		// on actually leaving Insert mode.
 		c.SignatureHelp = HoverState{}
+	}
+	if m != types.ModeVisual {
+		c.VisualAnchor = 0
+		c.VisualKind = types.VisualNone
 	}
 }
 

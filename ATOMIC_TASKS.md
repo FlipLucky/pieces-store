@@ -1160,13 +1160,385 @@ quick wins first, the item needing real investigation last:
       same class of problem, T47 should piggyback on whatever T42 builds,
       not be attempted independently. (M, 🧠 — blocked on T42's mechanism)
 
+## 11. Visual mode (scoped 2026-10-18)
+
+Real design work, not a sketch — see `docs/concepts/` for the write-up once
+it lands there too. Flagged previously as the user's own carve-out to
+design/drive rather than default-delegate; these three tasks are the
+settled v1 shape, split the same way T22-T25's clipboard work was (small,
+independently committable, same underlying feature). **`o`/`iw`/`ip`/`aw`
+were originally going to be deferred to a "v2"; pulled back into v1 after
+direct pushback** — treating them as disposable extras was rejected as
+exactly the kind of "hanging end" half-feature this project's own
+less-tech-debt philosophy argues against. Block mode's `I`/`A`
+(multi-line insert/append replay) is the one deliberate exception, cut
+from this pass on purpose (not deferred apologetically) pending a
+separate, later multi-cursor design conversation — the user's own
+framing: block-visual and multi-cursor are two different answers to the
+same underlying need, and deserve to be designed together rather than
+building one as a rushed stand-in for the other.
+
+The whole design rests on one correction made mid-conversation and worth
+restating here, since it's the reason this needed no new `ActionKind` at
+all: **a visual selection is just an offset — multiple offsets for block
+mode, never a new mechanism.** Block delete/yank resolves to several
+`offset.TextRange`s, the same shape `:%s///`'s multi-match substitute and
+`:Format`/completion's `AdditionalTextEdits` already apply via a sorted
+end-to-start loop — block mode needed one new capability interface
+(`hasRanges`, alongside the existing `hasRange`), not a parallel action
+type.
+
+- [x] **T52 — Visual mode core: char/linewise entry, motion, and
+      `d`/`x`/`y`/`c`.** Done 2026-10-18, including `o` (originally
+      scoped as T53's — pulled forward since it fell out for free, see
+      below). The foundation; T53/T54 build on it.
+
+      `Cursor` gained `VisualAnchor int` (a byte offset) and
+      `VisualKind types.VisualKind` (`VisualNone`/`VisualChar`/
+      `VisualLine`/`VisualBlock` — a real enum, not a bool, so T54's Block
+      slots into the same field with no migration). The selection is never
+      stored as its own range anywhere — only ever derived from
+      `(VisualAnchor, the live cursor)` on demand, by a single new
+      `interpreter.ResolveVisualRange`, used both to act on the selection
+      and to render it.
+
+      Entering Visual (`v`/`V` in Normal mode) resolves into **three
+      small, independently-reusable actions dispatched together**, per
+      CLAUDE.md's "Minimal primitives, maximal composition":
+      `ActionEnterVisual` (bare mode switch, structurally identical to the
+      existing `ActionEnterInsert`/`ActionEnterCommand`),
+      `ActionSetVisualAnchor{Offset}`, and `ActionSetVisualKind{Kind}` —
+      `interpreter.ProcessNormal` already resolved into "one or more
+      Actions," so three off one keystroke needed no new plumbing. The
+      split paid off immediately, not just in principle: pressing `v`/`V`
+      *again while already in Visual* reuses the same keyengine verb
+      identity through a *different* processor (`interpreter.ProcessVisual`
+      instead of `ProcessNormal`) — same kind re-pressed dispatches
+      `ExitVisualAction` alone (cancel); a *different* kind dispatches
+      `ActionSetVisualKind` **alone**, with no mode switch or anchor reset
+      — real vim's `V`-while-already-in-char-visual behavior, reached with
+      zero new logic because the primitive was already separate.
+
+      `keyengine/visual_mode.go` is no longer the stale `diw`-shaped
+      scaffolding: `CreateVisualModeDirects` is flat (everything is a
+      Direct — motions, `d`/`x`/`y`/`c`, `o`, `v`/`V`/`<Esc>`), since
+      Visual's real grammar never composes a verb with a following noun.
+      Required one real fix to `keyengine.CommandContext` beyond just
+      populating the table: `modeTables()` used to hardcode `nil` for
+      Visual mode's direct table (nothing had ever needed it before);
+      now returns the real `visualModeDirects` map.
+
+      `d`/`x`/`y`/`c` needed a genuinely new (small) resolver,
+      `interpreter.ResolveVisualRange` — not `resolveRange`, since there's
+      no Modifier/Noun left to read once the selection already exists as
+      live state — but it converges into the *exact same*
+      `DeleteAction`/`YankAction` constructors `resolveRange`-driven
+      Normal-mode verbs already use. One real, confirmed-against-actual-
+      vim subtlety: Visual selection is **inclusive** of wherever the
+      cursor lands (`v` then `w` on "hello world" selects "hello w",
+      including the `w` — vim's own well-known behavior), unlike Normal's
+      exclusive bare-motion sweeps (`dw` stops right before it) — caught
+      by checking real vim rather than assuming symmetry with Normal's
+      `dw`, the same discipline this project got pushed back into once
+      before over `3diw`. `d`/`x`/`y` all exit Visual mode back to Normal
+      afterward (`ExitVisualAction`, a new, equally-trivial `ActionKind`
+      mirroring `ActionExitInsert`'s existing shape); `c` leaves via
+      `EnterInsertAction`'s own mode switch instead, whose generic
+      "leaving Visual" cleanup (`Cursor.SetMode`) already clears
+      anchor/kind as a side effect — no second exit action needed there.
+
+      `o` (swap which end is the anchor) needed **no new action type at
+      all**: it resolves to the exact same `MoveAction`/
+      `SetVisualAnchorAction` primitives entering Visual already
+      introduced — `MoveAction{Target: anchor}` plus
+      `SetVisualAnchorAction{Offset: oldCursor}`. This is the second
+      concrete payoff of the primitive split (after the kind-toggle case
+      above), and is why `o` shipped with T52 instead of waiting for T53
+      as originally planned — it genuinely cost nothing extra once the
+      anchor/kind split existed.
+
+      Register storage: a smaller, more honest version of the original
+      plan. `clipboardregister.Entry.Value string` → `Entry.Values
+      []string` is **deliberately deferred to T54**, not done here — T52
+      never produces more than one value per entry, so widening the shape
+      now would be exactly the premature-primitive mistake CLAUDE.md's
+      "Minimal primitives, maximal composition" warns against (a second
+      caller has to actually exist first). What *did* ship:
+      `RegisterType.Visual` (pre-built, previously unused) now actually
+      gets populated — `d`/`x`/`y`/`c` in Visual mode all store into it
+      (and the unnamed register, same as every delete/yank), not into
+      Normal mode's `Delete`/`Yank` categories. This needed one small,
+      justified fix to a pre-existing inconsistency it exposed: `YankAction`
+      never carried its own register destination at all — Executor
+      hardcoded `clipboardregister.Yank` for every yank, unlike
+      `DeleteAction`, which already carried a configurable `Register`
+      field. Added `YankAction.Register` + `RegisterDestination()` (same
+      shape `DeleteAction` already had) and updated Executor's
+      `ActionYank` case to read it, defaulting to `clipboardregister.Yank`
+      when absent — fixes the inconsistency for Normal mode too, not just
+      a Visual-only patch.
+
+      Rendering: both frontends reuse the exact highlight mechanism
+      already built for `:s///`'s live preview — a new
+      `Editor.VisualSelectionRanges() []offset.TextRange` (same return
+      shape as `SubstitutePreviewRanges`, appended to it before the
+      existing per-line filter) feeds the identical background-tag/fill
+      code paths in both `gui-base` and `tui-base`, one line changed per
+      frontend. Status-bar mode text and cursor-shape (block vs. bar)
+      needed zero changes — both frontends already had a `ModeVisual`
+      case waiting, pre-built ahead of this task.
+
+      **`<C-v>` (block entry) is deliberately NOT wired yet** — scoped out
+      of this task on purpose rather than half-shipped: binding it now
+      would enter `VisualKind.Block` while `d`/`x`/`y`/`c` still resolve
+      through the single-range `ResolveVisualRange`, silently selecting a
+      char-wise span instead of a rectangle. T54 wires `<C-v>` at the same
+      time it builds the real multi-range resolution — no dual-path, no
+      half-working mode reachable in between.
+
+      Verified via real `HandleKey` sequences through a live `Editor`
+      (`internal/editor/visual_test.go`): entry/exit/toggle-in-place,
+      motions extending selection without moving the anchor, `d`/`x`/`y`/`c`
+      each against the real inclusive-selection math above, linewise
+      rounding via `V`, `o`'s swap, the named-register prefix working
+      unmodified in Visual mode (it's resolved generically in `keyengine`
+      before mode tables are even consulted), and a regression guard that
+      `v`/`V` don't collide with any existing Normal-mode verb. Replaced
+      (not left stale alongside) one pre-T52 test —
+      `TestVisualModeHasNoDirects` — that asserted the old scaffolding's
+      "Visual mode has no direct table, keys fizzle" behavior, now
+      genuinely wrong; same discipline T27's command-completion change
+      already established. `go build`/`vet`/`gofmt`/`test ./...` all
+      clean, plus both tagged `gui-local`/`tui-local` builds. (L, 🧠)
+- [x] **T53 — Visual mode text objects (`iw`/`ip`/`aw`).** Done
+      2026-10-18. `o` originally scoped here shipped with T52 instead — it
+      fell out for free from the anchor/kind action split (see T52's
+      writeup), so there was no reason to hold it back.
+
+      `iw`/`ip`/`aw` are reachable directly from Visual mode with no
+      leading verb — real vim's grammar never needs one there, unlike
+      Normal's `diw`. The one real design wrinkle: keyengine's parser
+      state machine always promotes whichever key starts a sequence into
+      the **Verb** slot, with no way to start directly in the Modifier
+      slot. Rather than touch the parser (a dispatch-logic change, exactly
+      what "simple, not easy" says shouldn't be needed for a new
+      keybinding), `i`/`a` are registered as Visual mode's own "verbs" in
+      `CreateVisualModeVerbs` — not because they're verbs semantically,
+      just because that's the slot the state machine will put them in —
+      with the identical whitelist shape (`i`→`w`/`p`, `a`→`w`) Normal
+      mode's real `Inside`/`Around` modifiers already use. `w`/`p` land in
+      a new, populated `CreateVisualModeNouns` (same `Word`/`Paragraph`
+      identities Normal's own nouns use; "w" also stays a bare-motion
+      Direct — no collision, since `ProcessCommand` only ever consults
+      `nouns` while a verb is pending, the exact non-collision shape
+      `keyengine.md` already documents for Normal's own `p`/`Paragraph`
+      vs. `p`/`Paste`).
+
+      `interpreter.ProcessVisual` reads the result as
+      `ExecutableCommand{Verb: Inside/Around, Noun: Word/Paragraph}` (not
+      `Modifier`, which stays `None` — a direct consequence of the
+      slot-promotion wrinkle above, not a bug) and calls `resolveRange`
+      directly — the exact same resolver, count-chaining included, Normal
+      mode's `diw`/`daw`/`dip`/`3diw` already use — then sets
+      `VisualAnchor`/cursor to the resolved range's two ends via the
+      existing `SetVisualAnchorAction`/`MoveAction` primitives, rather than
+      acting on the range immediately. Visual mode stays active afterward
+      (no `ExitVisualAction`), so a following `d`/`y`/`c` acts on exactly
+      what was just selected — verified end to end
+      (`v,i,w,d`/`v,a,w,d`/`v,i,p,d`).
+
+      Verified via real `HandleKey` sequences
+      (`internal/editor/visual_test.go`): selection-extension math for
+      `iw`/`aw`/`ip`, a follow-up delete actually acting on the extended
+      range, and a regression guard that bare `w` (no verb pending) still
+      resolves as a motion alongside the new noun-table entry sharing its
+      key. `go build`/`vet`/`gofmt`/`test ./...` all clean, plus both
+      tagged `gui-local`/`tui-local` builds. (S, 🧠)
+- [x] **T54 — Block-visual mode (`<C-v>`): select, delete, yank, paste.**
+      **Shipped 2026-10-18.** Design held exactly as scoped before
+      implementation — every item below landed as planned, with zero
+      surprises caught by the test suite (all 10 new tests passed on their
+      first run):
+      - Rectangle resolution (`interpreter.ResolveBlockRanges`): anchor and
+        cursor each convert to a `(row, col)` via
+        `offset.ByteOffsetToPosition`; row range and column range computed
+        independently per axis (`min`/`max`); each spanned row converts
+        back to a `offset.TextRange` via `offset.PositionToByteOffset` at
+        that row's start/one-past-end column — reusing existing position
+        primitives, no new position math needed.
+      - Block delete/yank (`BlockDeleteAction`/`BlockYankAction`) resolve
+        to **N `offset.TextRange`s** (one per row) via a new `hasRanges`
+        capability, checked *before* `hasRange` in `executor.Dispatch`'s
+        `ActionDelete`/`ActionYank` cases — no new `ActionKind` needed,
+        since a visual selection is just an offset, N of them for block
+        mode, same operation either way. Applied bottom-to-top (descending
+        `Start`) in `Editor.DeleteRangesWithRegister`, mirroring
+        `applySubstituteEditsLocked`'s own multi-edit-batch reasoning, just
+        adapted for an independent-range batch instead of a sequential-
+        match one.
+      - Register storage: `clipboardregister.Entry.Value string` →
+        `Entry.Values []string`, earned by this task as planned (T52
+        deliberately left it alone — no second caller existed yet). New
+        `StoreBlockRegisterValue` stores one multi-value `Entry`;
+        `len(Values) > 1` is the signal `:registers`/`Paste` use to detect
+        a block entry, no separate flag. `registers.go`'s
+        `formatRegisterLine` shows block entries with a `b` kind marker.
+      - Block paste (`p`/`P`, `Paste`/`PasteBefore` branching on
+        `len(clip.Values) > 1`): `resolveBlockPaste` inserts each row's
+        text at the same column on N consecutive rows via a new
+        `offset.Insertion{Offset, Text}` type and `hasInsertions`
+        capability → `Editor.InsertTextAtOffsets` (processes
+        highest-offset-first, so an earlier insertion never shifts a later
+        one's offset) → the new `ActionBlockInsert` `ActionKind` (genuinely
+        new, unlike delete/yank — `ActionInsertText`'s `hasInsertion` is
+        tied to one cursor-relative caret and can't express N locations).
+      - The ragged-right-edge and short-line-padding cases both resolved
+        exactly as predicted, confirmed by dedicated tests: block
+        *selection*/delete clips to a short row's own length
+        (`PositionToByteOffset` already clamps there naturally, zero extra
+        logic); block *paste* pads a short target row with spaces up to
+        the paste column instead (the opposite behavior, both real vim).
+        A paste row past the document's actual last line is skipped
+        outright (detected via `actual.Row != row` after the clamped
+        round-trip) — deliberately smaller than real vim's full vertical-
+        growth behavior there.
+      - Block `c` (Change) deliberately does **not** implement real vim's
+        multi-row replay — cut project-wide alongside `I`/`A`, parked for
+        a future joint design with multi-cursor (see this section's
+        "Longer horizon" entry below). Instead: block-delete +
+        `EnterInsertAction` (one insertion point) — an honest, smaller,
+        correct partial behavior, not a silently-wrong full one. Verified
+        by `TestVisualBlockChangeIsDeleteThenSingleInsert` that a typed
+        character lands exactly once, not replayed per row.
+      - Verified against the real `HandleKey` path, not just resolver-level
+        logic: `internal/editor/visual_test.go` gained 10 new tests
+        covering `<C-v>` entry/kind-switch/exit, rectangle delete/yank/`x`,
+        the ragged-edge clip, block-`c`'s partial behavior, a full
+        yank-then-paste round trip through real keystrokes, and both
+        documented paste edge cases (padding, skipped row). `go build`/
+        `vet`/`gofmt`/`test ./...` all clean; both tagged
+        `gui-local`/`tui-local` builds verified clean.
+      - Depended on T52 (shipped — `VisualKind.Block` already existed as an
+        enum value); independent of T53. (L, 🧠)
+
+- [x] **T55 — Fill out ordinary Normal-mode keybindings: 0/^/$, gg/G,
+      {/}, D/C/Y, X, s/S, a/A/I, ~, J.** **Shipped 2026-10-18.** The
+      user's own explicit framing: "small effort, lot of UX improvement" —
+      the agreed-upon detour after Visual mode's v1 shipped, deliberately
+      *not* T43's treesitter text objects. An audit against the real
+      `CreateNormalModeDirects`/`Verbs`/`Modifiers`/`Nouns` tables (not
+      guessed) found these missing:
+      - **Motions** (`0`/`^`/`$`/`{`/`}`): new `offset.MotionLineStart`/
+        `FirstNonBlank`/`LineEnd`/`ParagraphForward`/`Backward`, registered
+        as both Nouns (so `d0`/`d^`/`d$`/`d{`/`d}` compose for free through
+        the existing `resolveMotionRange` short-delete path, zero new
+        interpreter plumbing) and Directs (bare motion) — same dual
+        registration `h`/`l` already established. `$`/`e` are the only two
+        inclusive nouns (`isInclusiveMotion`); `resolveMotionRange` gained
+        one real fix for `$`'s own edge case: cursor already sitting on a
+        line's last character previously hit the generic `target == at`
+        no-op guard, incorrectly treating "already there" as "nothing to
+        delete" — now checked against `isInclusiveMotion` first, with a
+        real-character guard so `d$` on a blank line (or at the document's
+        end) still correctly no-ops.
+      - **`gg`/`G`**: `G` is a Direct (`Move`+`BufferEnd`); `gg` reuses the
+        existing generic doubled-verb mechanism (`dd`'s own "a verb's own
+        key, pressed again" check) via a new `g` verb (`GPrefix`) with no
+        allowedKeyActions — zero parser changes. New `ExecutableCommand.
+        HasCount bool` (set from the already-tracked `countStarted`) is
+        the one real new primitive this needed: bare `G` means "last
+        line," `5G` means "line 5," and `Count` alone can't distinguish
+        them (both default to 1). `gg` doesn't need it — a bare `gg` and
+        an explicit `1gg` both correctly mean line 1. Both land on
+        first-non-blank, not column 0, matching real vim. Deliberately
+        **not** registered as Nouns (no `dG`/`dgg`): real vim's version of
+        that is linewise (whole lines, not a charwise sweep) — a different
+        shape than every other noun here, a scope cut, not an oversight.
+        Extended into Visual mode's own direct table too (`0`/`^`/`$`/`G`/
+        `{`/`}` only, not `gg`) — free given the identical `Move`+`Noun`
+        shape Visual's existing `w`/`b`/`e`/`h`/`l`/`j`/`k` already use.
+      - **`D`/`C`/`Y`/`X`/`s`/`S`**: pure Direct-table aliases, zero new
+        logic — `D`/`C` are `d$`/`c$` spelled as one keystroke (free once
+        `$` is a Noun); `Y` is a true alias for `yy` (real vim's `Y` yanks
+        the whole line, not to end-of-line, despite the mnemonic); `X`
+        mirrors `x` backward (`Delete`+`CharBackward`, already-registered
+        identity); `s`/`S` are `cl`/`cc` spelled as one keystroke.
+      - **`a`/`A`/`I`**: three new verbs (`AppendAfterCursor`/
+        `AppendEndOfLine`/`InsertAtFirstNonBlank`), each a
+        `MoveAction`+`EnterInsertAction` pair — the same two-action
+        composition CLAUDE.md's "Minimal primitives, maximal composition"
+        already established for Visual mode's entry. `A`'s target needed
+        its own primitive, `offset.MotionLineContentEnd` (one past the
+        last real character) — genuinely distinct from `$`'s
+        `MotionLineEnd` (lands ON the last character), since Insert mode's
+        cursor can sit past the last character the way Normal mode's
+        can't.
+      - **`~`/`J`**: two new verbs, each a `DeleteAction`+`InsertTextAction`
+        pair — the same "replace this span with new text" composition
+        Change already uses, just with the replacement computed by a new
+        `offset` resolver instead of Insert mode. `offset.RangeToggleCase`
+        (count-aware, non-letters pass through unchanged) and
+        `offset.RangeJoinLines` (collapses the line break plus the next
+        line's leading whitespace into one space, or nothing at all if the
+        current line is blank — real vim's own behavior, not a
+        simplification).
+      - **Two real bugs found and fixed, not introduced by this task,
+        just never exercised by a test before it**:
+        1. `offset.lineStart`'s boundary-at-0 ambiguity: `FindOffset`'s
+           match predicate only ever tests positions it steps *onto*,
+           never its own starting position — so calling `lineStart(doc, 0)`
+           directly on a document whose first character is itself a
+           newline (an empty first line) wrongly concluded the cursor was
+           already *past* that empty line, into line 1, instead of sitting
+           on it. Surfaced by `$`/`J` on a leading blank line (neither had
+           ever been tested against one before). Fixed with a two-line
+           early return — confirmed via real vim semantics (an empty
+           line's cursor position is its own line, not the next one)
+           before writing the fix, same discipline as every prior
+           `offset`-package correctness fix in this project.
+        2. `cc`/`S` (Change + `LineMotion`) merged into the next line
+           instead of leaving an empty line to type into — `cc` itself had
+           **no end-to-end test at all** before this task, despite existing
+           since 2026-10-11's clipboard-register work; `resolveRange`'s
+           shared `RangeLine`-based chaining includes the trailing newline,
+           correct for `dd` (the line structurally disappears) and `yy`
+           (reproducing it on paste needs it), but wrong for `cc`/`S` —
+           real vim preserves the line break, replacing content only.
+           Fixed with a new `trimTrailingNewline` helper, verified to
+           generalize correctly to a count (`3cc`) via a dedicated test,
+           not just asserted.
+      - Verified against the real `HandleKey` path: 29 new tests in
+        `internal/editor/normalmode_ext_test.go` (one per command, plus
+        the two bug-regression tests and a `d$`/`d0` composability check).
+        `go build`/`vet`/`gofmt`/`test ./...` all clean; both tagged
+        `gui-local`/`tui-local` builds verified clean. (M, 🧠)
+
 ## Longer horizon — browse, don't start yet
 
-- **Visual mode** — real design work (operators act directly on a
-  selection, no following noun — a genuinely different shape from
-  Normal's verb+noun grammar). Flagged previously as your carve-out to
-  design/drive, not a default delegate. Its `StoreSelection` Target+Action
-  (see `DESIGN_KEY_PIPELINE.md`) is now at least sketched, not designed.
+- **Dot-repeat (`.`) + command-line history (`:` with `<Up>`/`<Down>` or
+  `<C-p>`/`<C-n>`) — explicitly parked together, not two separate items**
+  (the user's own framing, T55, 2026-10-18): both are instances of the same
+  underlying need, "remember a past thing so it can be replayed or
+  recalled," and there may be more than these two — worth a real audit
+  ("what else in this editor needs a history") before designing either one
+  in isolation, rather than building a narrow one-off mechanism for `.`
+  and discovering command-line history wants a genuinely different shape
+  later. Candidates to check when this is picked up: `:` command history
+  (the obvious one), search history (once `/` exists, T31), and whether
+  `.`'s "last change" record is itself expressible as a length-1 history
+  or wants its own shape (a single buffered action/keystroke-sequence
+  isn't quite the same thing as an append-only recall list). No scope
+  investigation done yet — genuinely "browse, don't start."
+- **Visual-mode `I`/`A` + multi-cursor** — explicitly parked together,
+  not two separate items: real vim's block-mode `I`/`A` replays an insert
+  across every selected row, which is really a narrower, line-rectangle-
+  shaped special case of the more general "edit at several cursors at
+  once" feature (the user's own actual daily habit before this — PHP
+  Storm multi-cursor, not vim block mode). Worth designing as one feature
+  with two entry points rather than building block-`I`/`A` first and
+  discovering multi-cursor wants a different shape later. No scope
+  investigation done yet — genuinely "browse, don't start," unlike T52-54
+  above.
 - **Live `:s///` replacement-text preview** ("inccommand=nosplit" —
   showing the word actually turn into its replacement in the buffer as
   you type, not just a highlight on the original). Deliberately not high

@@ -27,10 +27,13 @@ const maxEntriesPerCategory = 3
 // than duplicated per frontend.
 func formatRegisterLine(name string, entry clipboardregister.Entry) string {
 	kind := "c"
-	if entry.Linewise {
+	switch {
+	case len(entry.Values) > 1:
+		kind = "b" // block-visual entry (T54) — len(Values) > 1 is the signal
+	case entry.Linewise:
 		kind = "l"
 	}
-	value := strings.ReplaceAll(entry.Value, "\n", "^J")
+	value := strings.ReplaceAll(strings.Join(entry.Values, "^J"), "\n", "^J")
 	if runes := []rune(value); len(runes) > maxRegisterPreviewLen {
 		value = string(runes[:maxRegisterPreviewLen-1]) + "…"
 	}

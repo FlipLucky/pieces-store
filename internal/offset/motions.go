@@ -1,6 +1,7 @@
 package offset
 
 import (
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -142,6 +143,17 @@ type TextRange struct {
 	Length int
 }
 
+// Insertion is a single "put this text at this byte offset" instruction —
+// TextRange's sibling for the insert side rather than the delete/select
+// side (T54, 2026-10-18: block-visual paste inserts at N independent
+// offsets, one per row, the same "N of the one existing shape" reasoning
+// that let block delete/yank reuse TextRange rather than inventing a new
+// mechanism).
+type Insertion struct {
+	Offset int
+	Text   string
+}
+
 // spanStart scans backward from currentOffset for the start of the
 // word/whitespace span that inSpan defines, correctly distinguishing "a
 // real boundary character sits at offset 0" from "hit the start of the
@@ -192,8 +204,23 @@ func RangeAroundWord(doc Document, currentOffset int) TextRange {
 // isNewline is the boundary predicate lineStart/lineEnd scan for.
 func isNewline(r rune) bool { return r == '\n' }
 
-// lineStart returns the offset of the first rune of the line containing offset.
+// lineStart returns the offset of the first rune of the line containing
+// offset. offset itself must be checked first, before any backward search:
+// FindOffset's match predicate only ever runs against positions it steps
+// onto, never against its own starting position — so when offset is
+// already 0, a leading newline there is never actually tested by the
+// search, only discovered (if at all) via the boundary==0 fallback below.
+// That fallback's own GetRuneAt(0) check correctly means "a newline was
+// found right at the document start, so whatever line I started searching
+// from begins right after it" — true whenever offset > 0, but wrong for
+// offset == 0 itself, where it would wrongly treat the cursor as already
+// past an empty first line instead of sitting on it. The early return below
+// is the fix: offset == 0 always starts its own line, full stop, whether
+// that line is empty (its own newline sits at 0) or not.
 func lineStart(doc Document, offset int) int {
+	if offset <= 0 {
+		return 0
+	}
 	boundary := FindOffset(doc, offset, Backward, isNewline)
 	if boundary == 0 {
 		if r, _ := doc.GetRuneAt(0); r == '\n' {
@@ -325,4 +352,158 @@ func MotionFindCharBackward(doc Document, currentOffset int, target string) int 
 	}
 	targetRune := rune(target[0])
 	return FindOffset(doc, currentOffset, Backward, func(r rune) bool { return r == targetRune })
+}
+
+// MotionLineStart is `0`: column 0 of the line containing from.
+func MotionLineStart(doc Document, from int) int {
+	return lineStart(doc, from)
+}
+
+// MotionFirstNonBlank is `^`: the first non-blank character on the line
+// containing from, or (matching real vim) the same position MotionLineEnd
+// would land on if the whole line is blank or empty — there's no non-blank
+// character to find, so it falls back to "the end of whatever's there."
+func MotionFirstNonBlank(doc Document, from int) int {
+	start := lineStart(doc, from)
+	end := lineEnd(doc, from)
+	for pos := start; pos < end; {
+		r, w := doc.GetRuneAt(pos)
+		if !IsWhitespace(r) {
+			return pos
+		}
+		if w <= 0 {
+			w = 1
+		}
+		pos += w
+	}
+	return MotionLineEnd(doc, from)
+}
+
+// MotionLineEnd is `$`: the last real character of the line containing
+// from — or from's own line start, for a blank line with nothing to land
+// on (Normal mode's cursor can't sit past the last character the way
+// Insert mode's can, unlike MotionLineContentEnd below).
+func MotionLineEnd(doc Document, from int) int {
+	start := lineStart(doc, from)
+	end := lineEnd(doc, from)
+	if end <= start {
+		return start
+	}
+	return stepRune(doc, end, Backward)
+}
+
+// MotionLineContentEnd is A's append target: the position just past the
+// line's last real character (the row's own newline, or doc.Len() for the
+// last line with none). Genuinely distinct from MotionLineEnd above, not a
+// duplicate — A appends in Insert mode, which can sit one past the last
+// character; bare `$` in Normal mode can't, so it lands on the character
+// itself instead.
+func MotionLineContentEnd(doc Document, from int) int {
+	return lineEnd(doc, from)
+}
+
+// MotionParagraphForward is `}`: the start of the next blank line (a
+// paragraph boundary, same blank-line definition RangeInnerParagraph
+// already uses via isBlankSpan), or doc.Len() if none remains.
+func MotionParagraphForward(doc Document, from int) int {
+	end := lineEnd(doc, from)
+	for {
+		nStart, nEnd, ok := nextLineSpan(doc, end)
+		if !ok {
+			return doc.Len()
+		}
+		if isBlankSpan(doc, nStart, nEnd) {
+			return nStart
+		}
+		end = nEnd
+	}
+}
+
+// MotionParagraphBackward is `{`: MotionParagraphForward's mirror,
+// searching backward; returns 0 if none remains.
+func MotionParagraphBackward(doc Document, from int) int {
+	start := lineStart(doc, from)
+	for {
+		pStart, pEnd, ok := prevLineSpan(doc, start)
+		if !ok {
+			return 0
+		}
+		if isBlankSpan(doc, pStart, pEnd) {
+			return pStart
+		}
+		start = pStart
+	}
+}
+
+// RangeJoinLines computes J's edit: the current line's own line break,
+// plus the next line's leading whitespace, collapse into a single space
+// (or nothing at all, if the current line is itself blank — joining a
+// blank line shouldn't leave a stray leading space). ok is false when
+// there's no next line to join (already the last line).
+func RangeJoinLines(doc Document, from int) (deleteRange TextRange, insertText string, ok bool) {
+	curStart := lineStart(doc, from)
+	curEnd := lineEnd(doc, from)
+	if curEnd >= doc.Len() {
+		return TextRange{}, "", false
+	}
+	nextStart := stepRune(doc, curEnd, Forward)
+
+	trimEnd := curEnd
+	for trimEnd > curStart {
+		prev := stepRune(doc, trimEnd, Backward)
+		r, _ := doc.GetRuneAt(prev)
+		if !IsWhitespace(r) {
+			break
+		}
+		trimEnd = prev
+	}
+
+	contentStart := nextStart
+	for contentStart < doc.Len() {
+		r, w := doc.GetRuneAt(contentStart)
+		if r == '\n' || !IsWhitespace(r) {
+			break
+		}
+		if w <= 0 {
+			w = 1
+		}
+		contentStart += w
+	}
+
+	insert := " "
+	if trimEnd == curStart {
+		insert = ""
+	}
+	return TextRange{Start: trimEnd, Length: contentStart - trimEnd}, insert, true
+}
+
+// RangeToggleCase computes ~'s edit: count runes starting at from, each
+// with its letter case swapped (a non-letter passes through unchanged,
+// matching real vim). ok is false when there's nothing left to toggle
+// (cursor already at the document's end).
+func RangeToggleCase(doc Document, from int, count int) (TextRange, string, bool) {
+	if count < 1 {
+		count = 1
+	}
+	pos := from
+	var b strings.Builder
+	for i := 0; i < count && pos < doc.Len(); i++ {
+		r, w := doc.GetRuneAt(pos)
+		switch {
+		case unicode.IsUpper(r):
+			b.WriteRune(unicode.ToLower(r))
+		case unicode.IsLower(r):
+			b.WriteRune(unicode.ToUpper(r))
+		default:
+			b.WriteRune(r)
+		}
+		if w <= 0 {
+			w = 1
+		}
+		pos += w
+	}
+	if pos == from {
+		return TextRange{}, "", false
+	}
+	return TextRange{Start: from, Length: pos - from}, b.String(), true
 }

@@ -25,6 +25,38 @@ independent of vim keybindings specifically.
   `ScanUntil` is dead code — an abandoned attempt to simplify/replace
   `FindOffset` that never got finished; not yet decided whether to delete
   it or complete the replacement.
+
+  T55 (2026-10-18) added `MotionLineStart`/`MotionFirstNonBlank`/
+  `MotionLineEnd`/`MotionLineContentEnd`/`MotionParagraphForward`/`Backward`
+  (`0`/`^`/`$`/`A`'s own target/`}`/`{`) plus `RangeJoinLines`/
+  `RangeToggleCase` (`J`/`~`) — all thin, composable wrappers over the
+  already-private `lineStart`/`lineEnd`/`prevLineSpan`/`nextLineSpan`/
+  `isBlankSpan` this file's `RangeLine`/`RangeInnerParagraph` already used
+  internally, not new scanning logic. `MotionLineEnd` (lands ON the last
+  real character, Normal mode's own `$`) and `MotionLineContentEnd` (one
+  past it, `A`'s append target) are genuinely two different primitives, not
+  a duplicate pair — Insert mode's cursor can sit past the last character
+  the way Normal mode's can't.
+
+  **A real, pre-existing `lineStart` bug, found by this task and fixed at
+  the root**: calling it directly with `offset == 0` on a document whose
+  first character is itself a newline (an empty first line) wrongly
+  concluded the cursor was already *past* that empty line, into line 1.
+  Root cause: `FindOffset`'s match predicate only ever tests positions it
+  steps *onto*, never its own starting position — so a direct call at
+  offset 0 never gets to test offset 0's own content via the normal search
+  path at all, only via `lineStart`'s own compensating `GetRuneAt(0)`
+  check, whose existing interpretation (there's a newline right at the
+  document start, so whatever line I started searching *from* begins right
+  after it) is correct for every `offset > 0` call but wrong for `offset ==
+  0` itself, where there is no "line I started searching from" other than
+  the one actually sitting at 0. Fixed with a two-line early return
+  (`offset <= 0` always starts its own line) — confirmed against real vim
+  semantics first (an empty line's cursor position is that line, not the
+  next one), the same discipline every prior correctness fix in this
+  package follows. Never caught before because nothing had ever called
+  `RangeLine`/`lineStart`-dependent logic with the cursor sitting exactly
+  on a document's own leading blank line.
 - `bracket.go` — `MatchBracket` (T44, 2026-10-18), vim's `%`: depth-counts
   same-type brackets from a starting position to find its match. Takes an
   optional `skip func(offset int) bool` so a caller can exclude offsets

@@ -74,6 +74,76 @@ const (
 	// only: `N%` (jump to N percent of the file, a wholly different
 	// feature sharing the same key) is a non-goal here, not an oversight.
 	BracketMatch
+
+	// EnterVisualChar/EnterVisualLine (T52) are reused across two different
+	// contexts, resolved differently by whichever interpreter function is
+	// active: from Normal mode (interpreter.ProcessNormal) they mean "enter
+	// Visual," producing a mode switch plus a fresh anchor plus this kind.
+	// From Visual mode's own table (interpreter.ProcessVisual) the same
+	// identity means "re-pressed" — exit if it's the kind already active,
+	// switch kind in place (no anchor reset) otherwise. Same vocabulary,
+	// different resolver — see CreateVisualModeDirects.
+	EnterVisualChar
+	EnterVisualLine
+	// EnterVisualBlock (T54, 2026-10-18) completes the set — same dual
+	// meaning as its two siblings (enter, from Normal; toggle/switch, from
+	// Visual's own table), not wired until T54 since binding it earlier
+	// would have made VisualKind.Block reachable while d/x/y/c still
+	// resolved a single char-wise range instead of a rectangle.
+	EnterVisualBlock
+	// ExitVisual is Visual mode's <Esc> — cancel the selection with no
+	// edit, mirroring EnterInsert's own exit shape.
+	ExitVisual
+	// VisualSwapEnds is Visual mode's `o` — swap which end is the anchor
+	// and which is the live cursor. Resolves to the exact same MoveAction/
+	// SetVisualAnchorAction primitives EnterVisualChar/Line already use,
+	// no new action type needed.
+	VisualSwapEnds
+
+	// LineStart/FirstNonBlank/LineEnd (0/^/$) and ParagraphForward/Backward
+	// ({/}) are ordinary Normal-mode motions (T55, 2026-10-18 — the
+	// "fill out Normal mode" pass), registered as both Nouns (so d0/d^/d$/
+	// d{/d} compose for free through the exact same resolveMotionRange path
+	// h/l already established) and Directs (bare cursor motion). LineEnd is
+	// the one inclusive noun among these — same category as WordEnd (e),
+	// see isInclusiveMotion.
+	LineStart
+	FirstNonBlank
+	LineEnd
+	ParagraphForward
+	ParagraphBackward
+
+	// GPrefix is `g` — not itself a motion, registered as a Verb purely to
+	// reuse the generic doubled-verb mechanism (dd/yy/cc's own "a verb's
+	// own key, pressed again, means X") for `gg`: pressing `g` twice
+	// resolves to ExecutableCommand{Verb: GPrefix, Noun: LineMotion}, read
+	// by ProcessNormal as "go to buffer start" (or line N with a count).
+	// Deliberately not composable with an operator (dgg) — that's real
+	// vim's linewise multi-line delete, a different shape than the
+	// charwise resolveMotionRange path every other noun here uses; see
+	// ATOMIC_TASKS.md's T55 for the scope cut. BufferEnd below is G's own
+	// Direct-only identity, not reachable as a Noun for the same reason.
+	GPrefix
+	BufferStart
+	BufferEnd
+
+	// AppendAfterCursor/AppendEndOfLine/InsertAtFirstNonBlank (a/A/I)
+	// complete Normal mode's insert-entry set alongside the existing
+	// EnterInsert (i) — each resolves to a MoveAction then EnterInsertAction,
+	// the same two-action composition pattern CLAUDE.md's "Minimal
+	// primitives, maximal composition" already established for Visual
+	// mode's entry.
+	AppendAfterCursor
+	AppendEndOfLine
+	InsertAtFirstNonBlank
+
+	// ToggleCase (~) and JoinLines (J) are standalone verbs, each resolving
+	// to a DeleteAction+InsertTextAction pair — the same "replace this span
+	// with new text" composition Change already uses, just with the
+	// replacement text computed by a new offset resolver instead of coming
+	// from Insert mode.
+	ToggleCase
+	JoinLines
 )
 
 // ErrInconsistentKeymap signals a whitelist/semantic-table mismatch: a key
@@ -108,6 +178,12 @@ type ExecutableCommand struct {
 	// prefix (e.g. "ayw, "adw, "ap) — 0 when none was selected, meaning
 	// "use the unnamed/category register only," same as real vim.
 	Register rune
+	// HasCount reports whether a count was actually typed, distinct from
+	// Count itself (which defaults to 1 either way). G (T55, 2026-10-18)
+	// is the one command that genuinely needs this: bare G means "last
+	// line," while 1G/5G mean "that specific line" — Count alone can't
+	// tell those apart, since both read as 1 by default.
+	HasCount bool
 }
 
 type CommandContext struct {
@@ -125,6 +201,7 @@ type CommandContext struct {
 	visualModeVerbs     map[string]KeyAction
 	visualModeModifiers map[string]KeyAction
 	visualModeNouns     map[string]KeyAction
+	visualModeDirects   map[string]DirectAction
 	editorMode          types.Mode
 }
 
@@ -146,17 +223,15 @@ func CreateCommandContext() *CommandContext {
 		visualModeVerbs:     CreateVisualModeVerbs(),
 		visualModeModifiers: CreateVisualModeModifiers(),
 		visualModeNouns:     CreateVisualModeNouns(),
+		visualModeDirects:   CreateVisualModeDirects(),
 	}
 }
 
 // modeTables picks the verb/modifier/noun/direct tables for whatever mode
-// CommandContext was last told about via SetEditorMode. Visual mode has no
-// direct table yet (nothing there is implemented beyond the copied
-// verb/modifier/noun scaffolding), which is fine — a nil map lookup is a
-// safe, always-"not found" no-op in Go.
+// CommandContext was last told about via SetEditorMode.
 func (cc *CommandContext) modeTables() (verbs, modifiers, nouns map[string]KeyAction, directs map[string]DirectAction) {
 	if cc.editorMode == types.ModeVisual {
-		return cc.visualModeVerbs, cc.visualModeModifiers, cc.visualModeNouns, nil
+		return cc.visualModeVerbs, cc.visualModeModifiers, cc.visualModeNouns, cc.visualModeDirects
 	}
 	return cc.normalModeVerbs, cc.normalModeModifiers, cc.normalModeNouns, cc.normalModeDirects
 }
@@ -281,6 +356,7 @@ func (cc *CommandContext) finalizeDirect(d DirectAction) *ExecutableCommand {
 		Modifier: d.Modifier,
 		Noun:     d.Noun,
 		Register: cc.register,
+		HasCount: cc.countStarted,
 	}
 	cc.clearCommandContext()
 	return ec
@@ -304,5 +380,6 @@ func (cc *CommandContext) createExecutableCommand() *ExecutableCommand {
 		Modifier: cc.modifier.name,
 		Noun:     cc.noun.name,
 		Register: cc.register,
+		HasCount: cc.countStarted,
 	}
 }
