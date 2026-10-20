@@ -1,9 +1,9 @@
 package interpreter
 
 import (
-	"github.com/fliplucky/pieces-store/internal/autopairs"
-	"github.com/fliplucky/pieces-store/internal/offset"
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/autopairs"
+	"github.com/fliplucky/daeplex/internal/offset"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // RuneContext is a read-only snapshot of the runes immediately before/after

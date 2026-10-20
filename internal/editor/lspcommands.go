@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fliplucky/pieces-store/internal/lspmanager"
-	"github.com/fliplucky/pieces-store/internal/types"
-	"github.com/fliplucky/pieces-store/platform"
+	"github.com/fliplucky/daeplex/internal/lspmanager"
+	"github.com/fliplucky/daeplex/internal/types"
+	"github.com/fliplucky/daeplex/platform"
 )
 
 // registryCacheMaxAge bounds how long a fetched mason-registry response is

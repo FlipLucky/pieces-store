@@ -1,8 +1,8 @@
 package editor
 
 import (
-	"github.com/fliplucky/pieces-store/internal/types"
-	"github.com/fliplucky/pieces-store/internal/viewmanager"
+	"github.com/fliplucky/daeplex/internal/types"
+	"github.com/fliplucky/daeplex/internal/viewmanager"
 )
 
 // bracketMatchStyleWindow bounds how far around the cursor `%` (T44) looks

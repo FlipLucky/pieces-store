@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 func mustParse(t *testing.T, cc *CommandContext, keys ...string) *ExecutableCommand {

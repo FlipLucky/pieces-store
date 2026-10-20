@@ -3,9 +3,9 @@ package tuibase
 import (
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/offset"
-	"github.com/fliplucky/pieces-store/internal/types"
-	"github.com/fliplucky/pieces-store/internal/viewmanager"
+	"github.com/fliplucky/daeplex/internal/offset"
+	"github.com/fliplucky/daeplex/internal/types"
+	"github.com/fliplucky/daeplex/internal/viewmanager"
 )
 
 func TestStyledLineTextNoSpansIsUnchanged(t *testing.T) {

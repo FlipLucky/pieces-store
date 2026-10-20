@@ -99,7 +99,7 @@ type TextEdit struct {
 	NewText string `json:"newText"`
 }
 
-// CompletionItem is trimmed to the fields pieces-store's own autocomplete
+// CompletionItem is trimmed to the fields DaePlex's own autocomplete
 // UI needs — every field name confirmed against a real gopls completion
 // response, including the fact that it uses TextEdit rather than a plain
 // InsertText for every item observed. AdditionalTextEdits is how gopls (and
@@ -195,7 +195,7 @@ func (s *Server) Formatting(uri string) ([]TextEdit, error) {
 }
 
 // Diagnostic mirrors one entry of textDocument/publishDiagnostics —
-// trimmed to what pieces-store renders (range + severity + message), not
+// trimmed to what DaePlex renders (range + severity + message), not
 // the full spec shape (tags, related information, etc.).
 type Diagnostic struct {
 	Range    Range  `json:"range"`

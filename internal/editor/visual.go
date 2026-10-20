@@ -1,9 +1,9 @@
 package editor
 
 import (
-	"github.com/fliplucky/pieces-store/internal/interpreter"
-	"github.com/fliplucky/pieces-store/internal/offset"
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/interpreter"
+	"github.com/fliplucky/daeplex/internal/offset"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // VisualSelectionRanges returns the current Visual-mode selection as a

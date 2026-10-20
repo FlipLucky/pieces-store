@@ -12,7 +12,7 @@ type SemanticTokensLegend struct {
 }
 
 // SemanticTokensOptions mirrors the subset of a server's advertised
-// semanticTokensProvider capability pieces-store reads.
+// semanticTokensProvider capability DaePlex reads.
 type SemanticTokensOptions struct {
 	Legend SemanticTokensLegend `json:"legend"`
 }

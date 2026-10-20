@@ -5,7 +5,7 @@
 // concerns, not "the view").
 package viewmanager
 
-import "github.com/fliplucky/pieces-store/internal/offset"
+import "github.com/fliplucky/daeplex/internal/offset"
 
 type VirtualGrid struct{}
 

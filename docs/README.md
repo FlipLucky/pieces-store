@@ -1,4 +1,4 @@
-# pieces-store wiki
+# DaePlex wiki
 
 A browsable, cross-linked map of this codebase — deliberately **not** the
 same thing as the other two documentation layers this project already has:

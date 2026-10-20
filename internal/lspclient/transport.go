@@ -1,12 +1,12 @@
 // Package lspclient is a minimal LSP client: enough of JSON-RPC 2.0's
 // Content-Length-framed transport, request/response correlation, and the
-// specific ~10 message types pieces-store's editor actually needs
+// specific ~10 message types DaePlex's editor actually needs
 // (initialize, textDocument/didOpen, didChange, hover, completion,
 // formatting, publishDiagnostics, shutdown, exit) to drive a real language
 // server. Deliberately not a full protocol library — every message shape
 // here was confirmed against a real running gopls (2026-09-20) rather than
 // typed from the spec blind, and the surface stays exactly as small as
-// pieces-store's own feature set needs.
+// DaePlex's own feature set needs.
 package lspclient
 
 import (

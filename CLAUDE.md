@@ -4,7 +4,8 @@ Guidance for Claude Code (and other agents) working in this repository.
 
 ## Project overview
 
-`pieces-store` is an early-stage Go text editor built around a piece-table text
+`DaePlex` (module `github.com/fliplucky/daeplex`, repo renamed from
+`pieces-store` 2026-10-20 — see Current phase) is an early-stage Go text editor built around a piece-table text
 buffer, with two independent front ends sharing one editor core: a GUI built
 on [Gio](https://gioui.org) and a TUI built on
 [tview](https://github.com/rivo/tview)/tcell. Both front ends drive the same
@@ -458,7 +459,7 @@ document's URI so a notification for a since-closed buffer is discarded.
 A real, if minor, test-isolation bug was caught the same session: wiring
 LSP startup into every file-open path meant existing tests started
 touching `platform.LSPServersDir()` — real `os.UserCacheDir()` — confirmed
-to actually create `~/.cache/pieces-store/` on the real machine during a
+to actually create `~/.cache/daeplex/` on the real machine during a
 plain `go test ./...`. Fixed with a package-wide `TestMain` in
 `internal/editor` isolating the cache/config env vars for the whole test
 binary.
@@ -1276,9 +1277,37 @@ passing with the fix. Also smoke-tested against the real tagged
 full `go test -race ./...` clean, plus both tagged `gui-local`/`tui-local`
 builds.
 
+**Project renamed to DaePlex, 2026-10-20** — the repo/module had been
+carrying its original placeholder name, `pieces-store`, since the very
+first commit; after a long, genuinely playful naming session the user
+settled on **DaePlex** (styled with capital D and P; terminal alias `dp`).
+Derivation, for anyone wondering where it came from later: `Dae(mon)` +
+`(sim)plex` — the `-plex` suffix (Latin *plectere*, "to weave/fold") is a
+literal description of what `internal/editor/async.go`'s `asyncResults`
+channel already does (multiplexing several background daemon processes —
+LSP installs, diagnostics, eventually hover/completion — through one
+drained channel), and the name's incidental near-homophone with "duplex"
+turned out to double as an accurate metaphor for this project's actual
+dual-frontend architecture (two fully independent units — `gui-base` and
+`tui-base` — sharing one foundation, the way a duplex house's two units
+share one structure).
+
+Renamed everywhere it's load-bearing: the Go module
+(`github.com/fliplucky/daeplex`, every internal import updated to match),
+`platform.appDirName` (the on-disk cache directory moves from
+`~/.cache/pieces-store/` to `~/.cache/daeplex/` — any LSP servers installed
+under the old path are orphaned there, not auto-migrated; `:LspInstall`
+simply reinstalls fresh under the new path), `tui-base`'s window title, and
+the local build binary names in `Taskfile.yaml` (`tmp/daeplex-api`,
+`tmp/daeplex-gui`, `tmp/dp` — the TUI binary gets the short alias since
+that's the one meant to be typed daily, the same way `vim`/`nvim` are).
+The GitHub remote itself (`github.com/FlipLucky/pieces-store`) has **not**
+been renamed as part of this — that's a separate, explicit decision since
+it's a shared/external resource, not just local repo content.
+
 ## Module & toolchain
 
-- Module: `github.com/fliplucky/pieces-store`
+- Module: `github.com/fliplucky/daeplex`
 - Go version: `1.26.2`
 - Key dependencies:
   - `gioui.org` — immediate-mode GUI toolkit, used by `internal/gui-base`
@@ -1599,7 +1628,7 @@ can end up in a dependency cycle with `editor` or with each other.
   mason-registry-template resolver (`{{version}}`,
   `{{ version | strip_prefix "v" }}`, and the `{{source.asset.*}}`
   self-reference forms) round out the GitHub-binary path. `index.go`
-  persists what's actually installed (`~/.cache/pieces-store/lsp-servers/
+  persists what's actually installed (`~/.cache/daeplex/lsp-servers/
   index.json` on Linux) so `:LspStatus` reflects real, restart-durable
   state rather than in-memory-only bookkeeping. **Zero new third-party
   dependencies** — everything above is stdlib (`net/http`, `archive/zip`,

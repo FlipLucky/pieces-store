@@ -18,11 +18,11 @@ import (
 	"gioui.org/text"
 	"gioui.org/widget/material"
 
-	"github.com/fliplucky/pieces-store/internal/editor"
-	"github.com/fliplucky/pieces-store/internal/offset"
-	"github.com/fliplucky/pieces-store/internal/types"
-	"github.com/fliplucky/pieces-store/internal/viewmanager"
-	"github.com/fliplucky/pieces-store/internal/workspace"
+	"github.com/fliplucky/daeplex/internal/editor"
+	"github.com/fliplucky/daeplex/internal/offset"
+	"github.com/fliplucky/daeplex/internal/types"
+	"github.com/fliplucky/daeplex/internal/viewmanager"
+	"github.com/fliplucky/daeplex/internal/workspace"
 )
 
 // viewportMargin is how many extra lines above/below the visible window get

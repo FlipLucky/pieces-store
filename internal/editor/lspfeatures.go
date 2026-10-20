@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/fliplucky/pieces-store/internal/lspclient"
-	"github.com/fliplucky/pieces-store/internal/piecetable"
+	"github.com/fliplucky/daeplex/internal/lspclient"
+	"github.com/fliplucky/daeplex/internal/piecetable"
 )
 
 // finishBufferMutationLocked is the common tail of every LSP-driven text

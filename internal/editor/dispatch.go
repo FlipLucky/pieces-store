@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"sort"
 
-	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
-	"github.com/fliplucky/pieces-store/internal/executor"
-	"github.com/fliplucky/pieces-store/internal/interpreter"
-	"github.com/fliplucky/pieces-store/internal/keyengine"
-	"github.com/fliplucky/pieces-store/internal/offset"
-	"github.com/fliplucky/pieces-store/internal/piecetable"
-	"github.com/fliplucky/pieces-store/internal/types"
+	clipboardregister "github.com/fliplucky/daeplex/internal/clipboard-register"
+	"github.com/fliplucky/daeplex/internal/executor"
+	"github.com/fliplucky/daeplex/internal/interpreter"
+	"github.com/fliplucky/daeplex/internal/keyengine"
+	"github.com/fliplucky/daeplex/internal/offset"
+	"github.com/fliplucky/daeplex/internal/piecetable"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // HandleKey is the single entry point for all keyboard input. It routes on

@@ -101,7 +101,7 @@ func Install(serversDir string, spec PackageSpec, entry Entry, targets []string)
 		found, err := exec.LookPath(entry.BinName)
 		if err != nil {
 			return InstalledServer{}, fmt.Errorf(
-				"%s not found on PATH — it ships with its own SDK, nothing for pieces-store to install; make sure the SDK is installed and on PATH", entry.BinName)
+				"%s not found on PATH — it ships with its own SDK, nothing for DaePlex to install; make sure the SDK is installed and on PATH", entry.BinName)
 		}
 		return InstalledServer{PackageName: entry.PackageName, BinName: entry.BinName, BinPath: found}, nil
 	}

@@ -11,14 +11,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fliplucky/pieces-store/internal/langdetect"
-	"github.com/fliplucky/pieces-store/internal/lspclient"
-	"github.com/fliplucky/pieces-store/internal/lspmanager"
-	"github.com/fliplucky/pieces-store/internal/offset"
-	"github.com/fliplucky/pieces-store/internal/piecetable"
-	"github.com/fliplucky/pieces-store/internal/types"
-	"github.com/fliplucky/pieces-store/internal/viewmanager"
-	"github.com/fliplucky/pieces-store/platform"
+	"github.com/fliplucky/daeplex/internal/langdetect"
+	"github.com/fliplucky/daeplex/internal/lspclient"
+	"github.com/fliplucky/daeplex/internal/lspmanager"
+	"github.com/fliplucky/daeplex/internal/offset"
+	"github.com/fliplucky/daeplex/internal/piecetable"
+	"github.com/fliplucky/daeplex/internal/types"
+	"github.com/fliplucky/daeplex/internal/viewmanager"
+	"github.com/fliplucky/daeplex/platform"
 )
 
 // ensureLSPForCurrentBufferLocked (re)targets the LSP layer at the table's

@@ -1,12 +1,12 @@
 package editor
 
 import (
-	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
-	"github.com/fliplucky/pieces-store/internal/keyengine"
-	"github.com/fliplucky/pieces-store/internal/langdetect"
-	"github.com/fliplucky/pieces-store/internal/piecetable"
-	"github.com/fliplucky/pieces-store/internal/types"
-	"github.com/fliplucky/pieces-store/internal/viewmanager"
+	clipboardregister "github.com/fliplucky/daeplex/internal/clipboard-register"
+	"github.com/fliplucky/daeplex/internal/keyengine"
+	"github.com/fliplucky/daeplex/internal/langdetect"
+	"github.com/fliplucky/daeplex/internal/piecetable"
+	"github.com/fliplucky/daeplex/internal/types"
+	"github.com/fliplucky/daeplex/internal/viewmanager"
 )
 
 // File-related Editor methods — construction from disk, opening a

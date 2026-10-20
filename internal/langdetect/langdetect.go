@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // Detect maps a file path's extension (or, for Dockerfile specifically, its

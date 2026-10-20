@@ -3,7 +3,7 @@ package lspmanager
 import (
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 func TestEntryForKnownLanguage(t *testing.T) {

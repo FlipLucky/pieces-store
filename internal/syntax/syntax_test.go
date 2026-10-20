@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/piecetable"
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/piecetable"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 func TestStyleForPrefixMapping(t *testing.T) {

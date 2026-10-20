@@ -3,8 +3,8 @@ package editor
 import (
 	"testing"
 
-	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
-	"github.com/fliplucky/pieces-store/internal/types"
+	clipboardregister "github.com/fliplucky/daeplex/internal/clipboard-register"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // TestEnterVisualCharSetsAnchorAndMode covers v's three composed actions

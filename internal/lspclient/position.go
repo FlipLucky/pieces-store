@@ -49,7 +49,7 @@ func OffsetToPosition(source []byte, offset int) Position {
 // PositionToOffset converts an LSP Position back into a byte offset within
 // source — the inverse of OffsetToPosition, used to interpret a server's
 // response (a hover range, a completion textEdit, a formatting edit) in
-// terms pieces-store's piece-table already understands. A Character past
+// terms DaePlex's piece-table already understands. A Character past
 // the actual line's end (a server describing an insertion at end-of-line)
 // clamps to the line's end rather than reading into the next line.
 func PositionToOffset(source []byte, pos Position) int {

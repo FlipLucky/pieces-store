@@ -3,7 +3,7 @@ package editor
 import (
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/lspclient"
+	"github.com/fliplucky/daeplex/internal/lspclient"
 )
 
 // TestConfirmLSPCompletionAppliesAdditionalTextEdits covers T49: gopls's

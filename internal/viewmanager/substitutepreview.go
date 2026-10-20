@@ -1,6 +1,6 @@
 package viewmanager
 
-import "github.com/fliplucky/pieces-store/internal/offset"
+import "github.com/fliplucky/daeplex/internal/offset"
 
 // SubstitutePreviewContains reports whether byteOffset falls inside any of
 // ranges — the live match-highlight ranges from

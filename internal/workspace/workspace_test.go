@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/editor"
+	"github.com/fliplucky/daeplex/internal/editor"
 )
 
 // typeCommand drives a full ":cmd<Enter>" sequence through Workspace's own

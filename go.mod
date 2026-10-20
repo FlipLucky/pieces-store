@@ -1,4 +1,4 @@
-module github.com/fliplucky/pieces-store
+module github.com/fliplucky/daeplex
 
 go 1.26.2
 

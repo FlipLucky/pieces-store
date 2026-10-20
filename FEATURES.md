@@ -446,7 +446,7 @@ since buffers are splits' real prerequisite):
   v1 splits will only support *different* buffers side by side.
 - Session/workspace restore (vim's own `:mksession` is the native version
   of this), multi-root workspaces, per-project vs. global settings (a
-  `.pieces-store/`-style project-local config layered over global
+  `.daeplex/`-style project-local config layered over global
   preferences — depends on the config-file work above existing first).
 - `mini.pick`-style fuzzy files/grep/buffers UI (dotfiles research) — the
   front-end for the already-planned ripgrep-style workspace search; the

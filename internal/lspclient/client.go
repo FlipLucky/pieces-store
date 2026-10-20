@@ -21,7 +21,7 @@ func (e *RPCError) Error() string {
 }
 
 // Notification is a server-to-client message with no id — the only kind
-// pieces-store's own feature set needs to react to today is
+// DaePlex's own feature set needs to react to today is
 // textDocument/publishDiagnostics, but this stays generic rather than
 // special-cased to just that one method.
 type Notification struct {
@@ -173,7 +173,7 @@ func (c *Client) readLoop(r *frameReader) {
 			c.dispatchNotification(Notification{Method: msg.Method, Params: msg.Params})
 		case msg.Method != "":
 			// A server-to-client *request* (has both a method and an id) —
-			// none of pieces-store's own ~10 message list needs to serve
+			// none of DaePlex's own ~10 message list needs to serve
 			// one today, but a real server is entitled to send one (e.g.
 			// workspace/configuration) and will hang waiting for a reply
 			// if we never answer. Respond "method not found" rather than

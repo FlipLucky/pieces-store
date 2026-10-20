@@ -1,4 +1,10 @@
-# Pieces Store Text Editor. IT WORKS!
+# DaePlex Text Editor. IT WORKS!
+
+> Formerly `pieces-store`, renamed 2026-10-20 — see `CLAUDE.md`'s Current
+> phase for the story. This README predates several architecture renames
+> (`piecestore` → `piecetable`, the `keyengine`/`offset`/`viewmanager`
+> split) and isn't the source of truth for current structure — see
+> `CLAUDE.md`.
 
 A Go-based text editor architecture utilizing a **Piece Table** (Piece Store) data structure. The project is designed with a clean separation of concerns and features three primary interfaces:
 1. **GUI**: A cross-platform graphical user interface built with [Gio UI](https://gioui.org).

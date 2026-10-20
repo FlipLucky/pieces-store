@@ -1080,7 +1080,7 @@ quick wins first, the item needing real investigation last:
       mechanically possible; the gap is purely that nobody has written
       the actual `@function.outer`/`@function.inner`/`@parameter.inner`-
       convention queries for any of this project's curated languages.
-      Implementing this for real means pieces-store authoring and
+      Implementing this for real means DaePlex authoring and
       maintaining its own per-language text-object query set (at minimum
       Go, likely TS/JS next) — a genuinely bigger, ongoing-maintenance
       scope than "wire up an existing query," confirmed rather than

@@ -42,12 +42,12 @@ func Start(binPath string, args ...string) (*Server, error) {
 }
 
 // CompletionOptions is the subset of a server's advertised completion
-// capability pieces-store's own trigger-character handling needs.
+// capability DaePlex's own trigger-character handling needs.
 type CompletionOptions struct {
 	TriggerCharacters []string `json:"triggerCharacters"`
 }
 
-// Capabilities is the subset of InitializeResult.capabilities pieces-store
+// Capabilities is the subset of InitializeResult.capabilities DaePlex
 // actually reads — every field name and shape here was confirmed against a
 // real gopls initialize response (2026-09-20), not typed from the spec
 // blind. HoverProvider/DocumentFormattingProvider are deliberately
@@ -92,7 +92,7 @@ type initializeResult struct {
 // Initialize performs the full initialize/initialized handshake — the
 // mandatory first exchange before any other request is valid per spec —
 // and returns the server's real advertised capabilities. rootURI is a
-// "file://" URI; pieces-store's per-buffer model means this is usually the
+// "file://" URI; DaePlex's per-buffer model means this is usually the
 // buffer's own directory, not a real multi-root workspace.
 func (s *Server) Initialize(rootURI string) (Capabilities, error) {
 	params := map[string]any{
@@ -114,7 +114,7 @@ func (s *Server) Initialize(rootURI string) (Capabilities, error) {
 				"publishDiagnostics": map[string]any{},
 				// semanticTokens (T48): the generous, standard LSP token-
 				// type/modifier vocabulary (the same set VS Code itself
-				// declares) — pieces-store only maps a handful of these to
+				// declares) — DaePlex only maps a handful of these to
 				// a real types.Style (see editor/semantictokens.go), but
 				// declaring the full set here just tells the server what
 				// it's allowed to send, not what gets rendered.
@@ -160,7 +160,7 @@ func (s *Server) Initialize(rootURI string) (Capabilities, error) {
 
 // Stop performs the spec-mandated shutdown/exit sequence, then waits for
 // the process to actually exit — killing it after a bounded timeout if it
-// doesn't, since a hung or misbehaving server must never leave pieces-store
+// doesn't, since a hung or misbehaving server must never leave DaePlex
 // waiting forever to close a buffer or quit.
 func (s *Server) Stop() error {
 	_, shutdownErr := s.Call("shutdown", nil)

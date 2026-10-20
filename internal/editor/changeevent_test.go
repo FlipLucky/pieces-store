@@ -3,7 +3,7 @@ package editor
 import (
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/piecetable"
+	"github.com/fliplucky/daeplex/internal/piecetable"
 )
 
 func lastChangeEdit(t *testing.T, e *Editor) piecetable.Edit {

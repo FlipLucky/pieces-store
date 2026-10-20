@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // TestBracketMatchForwardAndBackward covers T44's bare `%` through the real

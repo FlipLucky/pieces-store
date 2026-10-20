@@ -30,11 +30,11 @@ import (
 	"strings"
 	"sync"
 
-	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
-	"github.com/fliplucky/pieces-store/internal/editor"
-	"github.com/fliplucky/pieces-store/internal/exmode"
-	"github.com/fliplucky/pieces-store/internal/keyengine"
-	"github.com/fliplucky/pieces-store/internal/types"
+	clipboardregister "github.com/fliplucky/daeplex/internal/clipboard-register"
+	"github.com/fliplucky/daeplex/internal/editor"
+	"github.com/fliplucky/daeplex/internal/exmode"
+	"github.com/fliplucky/daeplex/internal/keyengine"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // Workspace holds every open buffer and which one is current. It is its

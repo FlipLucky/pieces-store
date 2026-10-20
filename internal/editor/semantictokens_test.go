@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/lspclient"
-	"github.com/fliplucky/pieces-store/internal/offset"
-	"github.com/fliplucky/pieces-store/internal/types"
-	"github.com/fliplucky/pieces-store/internal/viewmanager"
+	"github.com/fliplucky/daeplex/internal/lspclient"
+	"github.com/fliplucky/daeplex/internal/offset"
+	"github.com/fliplucky/daeplex/internal/types"
+	"github.com/fliplucky/daeplex/internal/viewmanager"
 )
 
 func TestDecodeSemanticStyleSpansMapsKnownTypesAndDropsUnknown(t *testing.T) {

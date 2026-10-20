@@ -73,9 +73,9 @@ tasks:
     desc: Build all binaries locally
     cmds:
       - mkdir -p tmp
-      - go build -o tmp/api-local ./cmd/api/main.go
-      - go build -tags "{{.GRAMMAR_TAGS}}" -o tmp/gui-local ./cmd/gui/main.go
-      - go build -tags "{{.GRAMMAR_TAGS}}" -o tmp/tui-local ./cmd/tui/main.go
+      - go build -o tmp/daeplex-api ./cmd/api/main.go
+      - go build -tags "{{.GRAMMAR_TAGS}}" -o tmp/daeplex-gui ./cmd/gui/main.go
+      - go build -tags "{{.GRAMMAR_TAGS}}" -o tmp/dp ./cmd/tui/main.go
 
   clean:
     desc: Clean build artifacts and temporary files

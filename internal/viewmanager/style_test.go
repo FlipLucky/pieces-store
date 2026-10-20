@@ -3,8 +3,8 @@ package viewmanager
 import (
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/offset"
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/offset"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 func TestStyleAt(t *testing.T) {

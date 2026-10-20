@@ -3,7 +3,7 @@ package viewmanager
 import (
 	"strings"
 
-	"github.com/fliplucky/pieces-store/internal/offset"
+	"github.com/fliplucky/daeplex/internal/offset"
 )
 
 // Document is what a viewport needs to read from — minimal, defined here

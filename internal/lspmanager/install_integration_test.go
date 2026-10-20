@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fliplucky/pieces-store/internal/types"
-	"github.com/fliplucky/pieces-store/platform"
+	"github.com/fliplucky/daeplex/internal/types"
+	"github.com/fliplucky/daeplex/platform"
 )
 
 func skipUnlessIntegration(t *testing.T) {

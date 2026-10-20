@@ -16,10 +16,10 @@ package interpreter
 import (
 	"strings"
 
-	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
-	"github.com/fliplucky/pieces-store/internal/keyengine"
-	"github.com/fliplucky/pieces-store/internal/offset"
-	"github.com/fliplucky/pieces-store/internal/types"
+	clipboardregister "github.com/fliplucky/daeplex/internal/clipboard-register"
+	"github.com/fliplucky/daeplex/internal/keyengine"
+	"github.com/fliplucky/daeplex/internal/offset"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // Position is a read-only snapshot of where the cursor is right now —

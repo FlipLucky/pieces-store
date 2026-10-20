@@ -4,9 +4,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/fliplucky/pieces-store/internal/editor"
-	tuibase "github.com/fliplucky/pieces-store/internal/tui-base"
-	"github.com/fliplucky/pieces-store/internal/workspace"
+	"github.com/fliplucky/daeplex/internal/editor"
+	tuibase "github.com/fliplucky/daeplex/internal/tui-base"
+	"github.com/fliplucky/daeplex/internal/workspace"
 )
 
 func main() {

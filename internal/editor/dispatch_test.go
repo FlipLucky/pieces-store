@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // type sends each key in turn through the real HandleKey path.

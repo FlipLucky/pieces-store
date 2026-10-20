@@ -12,7 +12,7 @@ package editor
 import (
 	"fmt"
 
-	"github.com/fliplucky/pieces-store/internal/piecetable"
+	"github.com/fliplucky/daeplex/internal/piecetable"
 )
 
 // executeSetLocked is :set's execution — called from executeCommandLocked.

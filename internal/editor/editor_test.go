@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fliplucky/pieces-store/internal/piecetable"
+	"github.com/fliplucky/daeplex/internal/piecetable"
 )
 
 func TestEditorOrchestrator(t *testing.T) {

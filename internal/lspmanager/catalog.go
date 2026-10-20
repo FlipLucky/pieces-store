@@ -1,11 +1,11 @@
 // Package lspmanager installs, tracks, and resolves the language servers
-// pieces-store's curated internal/types.Language set uses, consuming
+// DaePlex's curated internal/types.Language set uses, consuming
 // mason-registry's live published data (github.com/mason-org/mason-registry)
 // rather than hand-rolling a manifest — same public data Neovim's Mason
 // plugin uses, for real interoperability, per the LSP integration plan.
 package lspmanager
 
-import "github.com/fliplucky/pieces-store/internal/types"
+import "github.com/fliplucky/daeplex/internal/types"
 
 // Method identifies how a catalog entry's binary is obtained. Confirmed
 // against a real registry.json dump (2026-09-20) rather than assumed: the
@@ -34,7 +34,7 @@ const (
 // when the user actually asks to install a server that needs it — per the
 // explicit product decision behind this package: full curated-language
 // coverage stays in scope, but nobody is required to have Node just because
-// pieces-store also supports Go.
+// DaePlex also supports Go.
 type Runtime int
 
 const (

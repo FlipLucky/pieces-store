@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	clipboardregister "github.com/fliplucky/pieces-store/internal/clipboard-register"
-	"github.com/fliplucky/pieces-store/internal/piecetable"
+	clipboardregister "github.com/fliplucky/daeplex/internal/clipboard-register"
+	"github.com/fliplucky/daeplex/internal/piecetable"
 )
 
 // maxRegisterPreviewLen caps a single register line's displayed content —

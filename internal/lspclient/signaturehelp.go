@@ -3,7 +3,7 @@ package lspclient
 import "encoding/json"
 
 // SignatureHelpOptions is the subset of a server's advertised
-// signatureHelpProvider capability pieces-store reads — just the trigger
+// signatureHelpProvider capability DaePlex reads — just the trigger
 // characters (real vim/IDE convention: `(`/`,`). RetriggerCharacters
 // (re-requesting as the cursor moves within an already-open signature, not
 // just on a fresh trigger) is a documented, deliberate MVP scope cut — see
@@ -15,7 +15,7 @@ type SignatureHelpOptions struct {
 // SignatureInformation is one candidate signature — trimmed to Label only
 // (the full rendered signature, e.g. "func Println(a ...any) (n int, err
 // error)"). Parameters/per-parameter documentation exist in the real spec
-// but aren't decoded here: pieces-store's MVP shows the active signature's
+// but aren't decoded here: DaePlex's MVP shows the active signature's
 // whole Label as plain text through the same HoverState popup Hover
 // already uses, with no per-parameter highlighting — a real, deliberate
 // scope cut (the simplest correct version of this feature), not an

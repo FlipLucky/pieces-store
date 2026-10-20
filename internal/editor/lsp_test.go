@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fliplucky/pieces-store/internal/lspmanager"
-	"github.com/fliplucky/pieces-store/internal/types"
-	"github.com/fliplucky/pieces-store/internal/viewmanager"
-	"github.com/fliplucky/pieces-store/platform"
+	"github.com/fliplucky/daeplex/internal/lspmanager"
+	"github.com/fliplucky/daeplex/internal/types"
+	"github.com/fliplucky/daeplex/internal/viewmanager"
+	"github.com/fliplucky/daeplex/platform"
 )
 
 // TestRealDiagnosticsFlowIntoStyleSpans is the real end-to-end proof for

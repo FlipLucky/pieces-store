@@ -3,7 +3,7 @@ package editor
 import (
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // T55 (2026-10-18) — "fill out Normal mode" pass: 0/^/$, gg/G, {/}, D/C/Y,

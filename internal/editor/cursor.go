@@ -1,10 +1,10 @@
 package editor
 
 import (
-	"github.com/fliplucky/pieces-store/internal/lspclient"
-	"github.com/fliplucky/pieces-store/internal/offset"
-	"github.com/fliplucky/pieces-store/internal/piecetable"
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/lspclient"
+	"github.com/fliplucky/daeplex/internal/offset"
+	"github.com/fliplucky/daeplex/internal/piecetable"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // CommandBuffer is the in-progress ":..." text typed in Command mode,

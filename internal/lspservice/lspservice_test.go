@@ -3,8 +3,8 @@ package lspservice
 import (
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/lspclient"
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/lspclient"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 func TestActiveReportsWhetherAServerIsSet(t *testing.T) {

@@ -3,7 +3,7 @@ package editor
 import (
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // TestYankWordStoresWithoutMutatingBuffer covers y's whole contract: the

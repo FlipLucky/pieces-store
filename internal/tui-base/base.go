@@ -7,11 +7,11 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/fliplucky/pieces-store/internal/editor"
-	"github.com/fliplucky/pieces-store/internal/offset"
-	"github.com/fliplucky/pieces-store/internal/types"
-	"github.com/fliplucky/pieces-store/internal/viewmanager"
-	"github.com/fliplucky/pieces-store/internal/workspace"
+	"github.com/fliplucky/daeplex/internal/editor"
+	"github.com/fliplucky/daeplex/internal/offset"
+	"github.com/fliplucky/daeplex/internal/types"
+	"github.com/fliplucky/daeplex/internal/viewmanager"
+	"github.com/fliplucky/daeplex/internal/workspace"
 )
 
 // completionWindow bounds candidates to at most maxRows entries, keeping
@@ -206,7 +206,7 @@ func Boot(ws *workspace.Workspace) error {
 		SetRegions(true)
 
 	editorView.SetBorder(true).
-		SetTitle("Pieces Store TUI Editor").
+		SetTitle("DaePlex TUI").
 		SetBorderColor(tcell.GetColor("#24283b"))
 
 	editorView.SetBackgroundColor(tokyoBg)
@@ -292,7 +292,7 @@ func Boot(ws *workspace.Workspace) error {
 			filePath = "[No Name]"
 		}
 
-		editorView.SetTitle(fmt.Sprintf(" Pieces Store TUI Editor — %s ", filePath))
+		editorView.SetTitle(fmt.Sprintf(" DaePlex TUI — %s ", filePath))
 
 		slice := cur.Viewport(cursor.Row, 1, viewportRadius)
 		spans := cur.StyleSpans(slice.StartOffset, slice.EndOffset)

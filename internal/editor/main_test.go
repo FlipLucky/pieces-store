@@ -12,14 +12,14 @@ import (
 // triggers ensureLSPForCurrentBufferLocked (lsp.go), which resolves an
 // installed server via platform.LSPServersDir() — real os.UserCacheDir()
 // unless overridden. Without this, a plain `go test ./...` would create
-// ~/.cache/pieces-store on the real machine as a side effect of testing
+// ~/.cache/daeplex on the real machine as a side effect of testing
 // (confirmed happening before this was added), and on a machine that
 // already has a real gopls installed via :LspInstall, would actually spawn
 // it in the background during every test that opens a .go file. A
 // package-wide TestMain isolates this once, rather than needing every
 // individual test that touches a real file to remember to do it.
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "pieces-store-editor-test-cache")
+	dir, err := os.MkdirTemp("", "daeplex-editor-test-cache")
 	if err != nil {
 		panic(err)
 	}

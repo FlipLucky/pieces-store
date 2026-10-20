@@ -1,8 +1,8 @@
 package viewmanager
 
 import (
-	"github.com/fliplucky/pieces-store/internal/offset"
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/offset"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 // DiagnosticSpan is a real LSP diagnostic positioned in the document —

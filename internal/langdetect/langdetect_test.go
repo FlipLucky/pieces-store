@@ -3,7 +3,7 @@ package langdetect
 import (
 	"testing"
 
-	"github.com/fliplucky/pieces-store/internal/types"
+	"github.com/fliplucky/daeplex/internal/types"
 )
 
 func TestDetect(t *testing.T) {
